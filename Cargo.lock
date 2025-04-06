@@ -284,7 +284,6 @@ name = "hamsando"
 version = "0.1.0"
 dependencies = [
  "addr",
- "log",
  "reqwest",
  "serde",
  "serde_json",
