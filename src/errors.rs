@@ -1,3 +1,5 @@
+use std::net::AddrParseError;
+
 use reqwest::{blocking::Response, StatusCode};
 use serde::Deserialize;
 use thiserror::Error;
@@ -18,6 +20,7 @@ pub struct ApiError {
 }
 
 impl ApiError {
+    /// Converts the response from a Porkbun API request to an `ApiError`.
     pub(crate) fn from_response(resp: Response) -> Self {
         #[derive(Deserialize)]
         struct ErrorResp {
@@ -56,4 +59,10 @@ pub enum ClientBuilderError {
     MissingField(String),
     #[error(transparent)]
     UrlParse(#[from] url::ParseError),
+}
+
+#[derive(Error, Debug)]
+pub enum ContentCreationError {
+    #[error(transparent)]
+    AddrParse(#[from] AddrParseError),
 }

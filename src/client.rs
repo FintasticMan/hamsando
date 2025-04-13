@@ -7,8 +7,12 @@ use serde_json::Value as JsonValue;
 use url::Url;
 
 use crate::record::{self, Content, Record, Type};
-use crate::{ApiError, ClientBuilderError, ClientError, DomainError, PayloadBuilder};
+use crate::{ApiError, ClientBuilderError, ClientError, DomainError, Payload};
 
+/// Splits the given domain name into the root and the prefix, if there is one.
+///
+/// # Errors
+/// - `MissingRoot` if the given domain name has no root
 fn split_domain<'a>(name: &'a domain::Name) -> Result<(Option<&'a str>, &'a str), DomainError> {
     let root = name
         .root()
@@ -18,6 +22,7 @@ fn split_domain<'a>(name: &'a domain::Name) -> Result<(Option<&'a str>, &'a str)
     Ok((prefix, root))
 }
 
+/// Builder for a [Client] that handles default values.
 pub struct ClientBuilder {
     endpoint: Option<Url>,
     apikey: Option<String>,
@@ -33,27 +38,44 @@ impl ClientBuilder {
         }
     }
 
+    /// Sets the API endpoint to the one given.
+    ///
+    /// The endpoint should have a trailing slash, as per [Url]'s semantics.
     pub fn endpoint(mut self, endpoint: &Url) -> Self {
         self.endpoint = Some(endpoint.clone());
         self
     }
 
+    /// In the case that `endpoint` is the Some variant, sets the API endpoint to it.
+    ///
+    /// The endpoint should have a trailing slash, as per [Url]'s semantics.
     pub fn endpoint_if_some(mut self, endpoint: Option<&Url>) -> Self {
         if let Some(endpoint) = endpoint {
             self.endpoint = Some(endpoint.clone());
         }
         self
     }
+
+    /// Sets the API key to the one given.
     pub fn apikey(mut self, apikey: &str) -> Self {
         self.apikey = Some(apikey.to_string());
         self
     }
 
+    /// Sets the secret API key to the one given.
     pub fn secretapikey(mut self, secretapikey: &str) -> Self {
         self.secretapikey = Some(secretapikey.to_string());
         self
     }
 
+    /// Builds a [Client] from the builder.
+    ///
+    /// In the case that no API endpoint is set, the default endpoint of
+    /// `https://api.porkbun.com/api/json/v3/` is used.
+    ///
+    /// # Errors
+    /// - `MissingField` if a required field isn't added to the builder.
+    /// - `UrlParse` if the default API endpoint fails to parse. This shouldn't happen.
     pub fn build(self) -> Result<Client, ClientBuilderError> {
         let endpoint = match self.endpoint {
             Some(endpoint) => endpoint,
@@ -66,15 +88,11 @@ impl ClientBuilder {
             .secretapikey
             .ok_or_else(|| ClientBuilderError::MissingField("secretapikey".to_string()))?;
 
-        Ok(Client {
-            endpoint,
-            apikey,
-            secretapikey,
-            client: reqwest::blocking::Client::new(),
-        })
+        Ok(Client::new(&endpoint, &apikey, &secretapikey))
     }
 }
 
+/// API client.
 pub struct Client {
     endpoint: Url,
     apikey: String,
@@ -83,36 +101,59 @@ pub struct Client {
 }
 
 impl Client {
+    /// Creates a new Client.
+    pub fn new(endpoint: &Url, apikey: &str, secretapikey: &str) -> Self {
+        Self {
+            endpoint: endpoint.clone(),
+            apikey: apikey.to_string(),
+            secretapikey: secretapikey.to_string(),
+            client: reqwest::blocking::Client::new(),
+        }
+    }
+
+    /// Returns a builder for a Client.
     pub fn builder() -> ClientBuilder {
         ClientBuilder::new()
     }
 
+    /// Creates a [Url] from the endpoint and the path sections.
     fn build_url(&self, path: &[&str]) -> Result<Url, url::ParseError> {
         path.iter()
             .filter(|p| !p.is_empty())
             .try_fold(self.endpoint.clone(), |acc, p| acc.join(&format!("{p}/")))
     }
 
+    /// Sends a POST request to the given url with the given payload.
     fn send_request<T: for<'de> Deserialize<'de>>(
         &self,
         url: Url,
-        payload: &JsonValue,
+        payload: Payload,
     ) -> Result<T, ClientError> {
-        let resp = self.client.post(url).json(payload).send()?;
+        let resp = self
+            .client
+            .post(url)
+            .json(&JsonValue::from(payload))
+            .send()?;
         if resp.status() != StatusCode::OK {
             return Err(ClientError::Porkbun(ApiError::from_response(resp)));
         }
         Ok(resp.json()?)
     }
 
-    fn payload_builder(&self) -> PayloadBuilder {
-        PayloadBuilder::new(&self.apikey, &self.secretapikey)
+    /// Returns a payload for sending to the Porkbun API.
+    ///
+    /// This payload already includes the data necessary for authorization.
+    fn payload(&self) -> Payload {
+        Payload::new(&self.apikey, &self.secretapikey)
     }
 
+    /// Calls the endpoint that tests if the authorization is correct.
+    ///
+    /// Also returns the caller's public IP address.
     pub fn test_auth(&self) -> Result<IpAddr, ClientError> {
         let url = self.build_url(&["ping"])?;
 
-        let payload = self.payload_builder().build();
+        let payload = self.payload();
 
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
@@ -120,7 +161,7 @@ impl Client {
             your_ip: IpAddr,
         }
 
-        Ok(self.send_request::<Response>(url, &payload)?.your_ip)
+        Ok(self.send_request::<Response>(url, payload)?.your_ip)
     }
 
     pub fn create_dns(
@@ -134,13 +175,12 @@ impl Client {
         let url = self.build_url(&["dns", "create", root])?;
 
         let payload = self
-            .payload_builder()
+            .payload()
             .add("type", content.type_as_str())
             .add("content", content.value_to_string())
             .add_if_some("name", prefix)
             .add_if_some("ttl", ttl)
-            .add_if_some("prio", prio)
-            .build();
+            .add_if_some("prio", prio);
 
         #[derive(Deserialize)]
         struct Response {
@@ -148,7 +188,7 @@ impl Client {
             id: i64,
         }
 
-        Ok(self.send_request::<Response>(url, &payload)?.id)
+        Ok(self.send_request::<Response>(url, payload)?.id)
     }
 
     pub fn edit_dns(
@@ -163,15 +203,14 @@ impl Client {
         let url = self.build_url(&["dns", "edit", root, &id.to_string()])?;
 
         let payload = self
-            .payload_builder()
+            .payload()
             .add("type", content.type_as_str())
             .add("content", content.value_to_string())
             .add_if_some("name", prefix)
             .add_if_some("ttl", ttl)
-            .add_if_some("prio", prio)
-            .build();
+            .add_if_some("prio", prio);
 
-        self.send_request(url, &payload)
+        self.send_request(url, payload)
     }
 
     pub fn edit_dns_by_name_type(
@@ -191,15 +230,19 @@ impl Client {
         ])?;
 
         let payload = self
-            .payload_builder()
+            .payload()
             .add("content", content.value_to_string())
             .add_if_some("ttl", ttl)
-            .add_if_some("prio", prio)
-            .build();
+            .add_if_some("prio", prio);
 
-        self.send_request(url, &payload)
+        self.send_request(url, payload)
     }
 
+    /// Deletes the DNS entry specified by the root of the domain name to be deleted, and its ID.
+    ///
+    /// # Errors
+    ///
+    /// Will return a `Domain` error in the case of the `domain` having a prefix.
     pub fn delete_dns(&self, domain: &domain::Name, id: i64) -> Result<(), ClientError> {
         let (prefix, root) = split_domain(domain)?;
         if prefix.is_some() {
@@ -210,9 +253,9 @@ impl Client {
 
         let url = self.build_url(&["dns", "delete", root, &id.to_string()])?;
 
-        let payload = self.payload_builder().build();
+        let payload = self.payload();
 
-        self.send_request(url, &payload)
+        self.send_request(url, payload)
     }
 
     pub fn delete_dns_by_name_type(
@@ -229,11 +272,16 @@ impl Client {
             prefix.unwrap_or(""),
         ])?;
 
-        let payload = self.payload_builder().build();
+        let payload = self.payload();
 
-        self.send_request(url, &payload)
+        self.send_request(url, payload)
     }
 
+    /// Retrieves the DNS entry specified by the root of the domain name, and its ID.
+    ///
+    /// # Errors
+    ///
+    /// Will return a `Domain` error in the case of the `domain` having a prefix.
     pub fn retrieve_dns(
         &self,
         domain: &domain::Name,
@@ -253,14 +301,14 @@ impl Client {
             &id.map_or_else(|| "".to_string(), |id| id.to_string()),
         ])?;
 
-        let payload = self.payload_builder().build();
+        let payload = self.payload();
 
         #[derive(Deserialize)]
         struct Response {
             records: Vec<Record>,
         }
 
-        Ok(self.send_request::<Response>(url, &payload)?.records)
+        Ok(self.send_request::<Response>(url, payload)?.records)
     }
 
     pub fn retrieve_dns_by_name_type(
@@ -277,13 +325,13 @@ impl Client {
             prefix.unwrap_or(""),
         ])?;
 
-        let payload = self.payload_builder().build();
+        let payload = self.payload();
 
         #[derive(Deserialize)]
         struct Response {
             records: Vec<Record>,
         }
 
-        Ok(self.send_request::<Response>(url, &payload)?.records)
+        Ok(self.send_request::<Response>(url, payload)?.records)
     }
 }
