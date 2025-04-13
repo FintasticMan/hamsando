@@ -3,8 +3,9 @@ pub mod record;
 use std::net::IpAddr;
 
 use addr::domain;
+use reqwest::{blocking::Response, StatusCode};
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::Value as JsonValue;
 use thiserror::Error as ThisError;
 use url::Url;
 
@@ -19,9 +20,39 @@ pub enum DomainError {
 }
 
 #[derive(ThisError, Debug)]
-pub enum ApiError {
+#[error("Porkbun API error: {status} - {message}")]
+pub struct ApiError {
+    status: StatusCode,
+    message: String,
+}
+
+impl ApiError {
+    fn from_response(resp: Response) -> Self {
+        #[derive(Deserialize)]
+        struct ErrorResp {
+            message: String,
+        }
+
+        let status = resp.status();
+        let text = resp
+            .text()
+            .unwrap_or_else(|e| format!("unable to read response body: {e}"));
+
+        let message = serde_json::from_str::<ErrorResp>(&text).map_or_else(
+            |e| format!("unable to get error message from {text:?}: {e}"),
+            |r| r.message,
+        );
+
+        Self { status, message }
+    }
+}
+
+#[derive(ThisError, Debug)]
+pub enum ClientError {
     #[error(transparent)]
     Domain(#[from] DomainError),
+    #[error(transparent)]
+    Porkbun(#[from] ApiError),
     #[error(transparent)]
     Reqwest(#[from] reqwest::Error),
     #[error(transparent)]
@@ -43,7 +74,7 @@ pub struct ClientBuilder {
 }
 
 impl ClientBuilder {
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self {
             endpoint: None,
             apikey: None,
@@ -93,6 +124,45 @@ impl ClientBuilder {
     }
 }
 
+#[derive(Debug)]
+struct PayloadBuilder {
+    payload: serde_json::Map<String, JsonValue>,
+}
+
+impl PayloadBuilder {
+    fn new(apikey: &str, secretapikey: &str) -> Self {
+        let mut payload = serde_json::Map::new();
+        payload["apikey"] = apikey.into();
+        payload["secretapikey"] = secretapikey.into();
+        Self { payload }
+    }
+
+    fn add<T: Into<JsonValue>>(mut self, key: &str, value: T) -> Self {
+        self.payload[key] = value.into();
+        self
+    }
+
+    fn add_if_some<T: Into<JsonValue>>(mut self, key: &str, value: Option<T>) -> Self {
+        if let Some(value) = value {
+            self.payload[key] = value.into();
+        }
+        self
+    }
+
+    fn build(self) -> JsonValue {
+        JsonValue::Object(self.payload)
+    }
+}
+
+fn split_domain<'a>(name: &'a domain::Name) -> Result<(Option<&'a str>, &'a str), DomainError> {
+    let root = name
+        .root()
+        .ok_or_else(|| DomainError::MissingRoot(name.to_string()))?;
+    let prefix = name.prefix();
+
+    Ok((prefix, root))
+}
+
 pub struct Client {
     endpoint: Url,
     apikey: String,
@@ -105,20 +175,32 @@ impl Client {
         ClientBuilder::new()
     }
 
-    pub fn test_auth(&self) -> Result<IpAddr, ApiError> {
-        let url = self.endpoint.join("ping")?;
+    fn build_url(&self, path: &[&str]) -> Result<Url, url::ParseError> {
+        path.iter()
+            .filter(|p| !p.is_empty())
+            .try_fold(self.endpoint.clone(), |acc, p| acc.join(&format!("{p}/")))
+    }
 
-        let payload = json!({
-            "secretapikey": self.secretapikey.as_str(),
-            "apikey": self.apikey.as_str(),
-        });
+    fn send_request<T: for<'de> Deserialize<'de>>(
+        &self,
+        url: Url,
+        payload: &JsonValue,
+    ) -> Result<T, ClientError> {
+        let resp = self.client.post(url).json(payload).send()?;
+        if resp.status() != StatusCode::OK {
+            return Err(ClientError::Porkbun(ApiError::from_response(resp)));
+        }
+        Ok(resp.json()?)
+    }
 
-        let resp = self
-            .client
-            .post(url)
-            .json(&payload)
-            .send()?
-            .error_for_status()?;
+    fn payload_builder(&self) -> PayloadBuilder {
+        PayloadBuilder::new(&self.apikey, &self.secretapikey)
+    }
+
+    pub fn test_auth(&self) -> Result<IpAddr, ClientError> {
+        let url = self.build_url(&["ping"])?;
+
+        let payload = self.payload_builder().build();
 
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
@@ -126,7 +208,7 @@ impl Client {
             your_ip: IpAddr,
         }
 
-        Ok(resp.json::<Response>()?.your_ip)
+        Ok(self.send_request::<Response>(url, &payload)?.your_ip)
     }
 
     pub fn create_dns(
@@ -135,32 +217,18 @@ impl Client {
         content: &Content,
         ttl: Option<i64>,
         prio: Option<i64>,
-    ) -> Result<i64, ApiError> {
+    ) -> Result<i64, ClientError> {
         let (prefix, root) = split_domain(domain)?;
-        let url = self.endpoint.join("dns/create/")?.join(root)?;
+        let url = self.build_url(&["dns", "create", root])?;
 
-        let mut payload = json!({
-            "secretapikey": self.secretapikey,
-            "apikey": self.apikey,
-            "type": content.type_as_str(),
-            "content": content.value_to_string(),
-        });
-        if let Some(prefix) = prefix {
-            payload["name"] = serde_json::Value::from(prefix);
-        }
-        if let Some(ttl) = ttl {
-            payload["ttl"] = serde_json::Value::from(ttl);
-        }
-        if let Some(prio) = prio {
-            payload["prio"] = serde_json::Value::from(prio);
-        }
-
-        let resp = self
-            .client
-            .post(url)
-            .json(&payload)
-            .send()?
-            .error_for_status()?;
+        let payload = self
+            .payload_builder()
+            .add("type", content.type_as_str())
+            .add("content", content.value_to_string())
+            .add_if_some("name", prefix)
+            .add_if_some("ttl", ttl)
+            .add_if_some("prio", prio)
+            .build();
 
         #[derive(Deserialize)]
         struct Response {
@@ -168,7 +236,7 @@ impl Client {
             id: i64,
         }
 
-        Ok(resp.json::<Response>()?.id)
+        Ok(self.send_request::<Response>(url, &payload)?.id)
     }
 
     pub fn edit_dns(
@@ -178,37 +246,20 @@ impl Client {
         content: &Content,
         ttl: Option<i64>,
         prio: Option<i64>,
-    ) -> Result<(), ApiError> {
+    ) -> Result<(), ClientError> {
         let (prefix, root) = split_domain(domain)?;
-        let url = self
-            .endpoint
-            .join("dns/edit/")?
-            .join(&format!("{root}/"))?
-            .join(&id.to_string())?;
+        let url = self.build_url(&["dns", "edit", root, &id.to_string()])?;
 
-        let mut payload = json!({
-            "secretapikey": self.secretapikey,
-            "apikey": self.apikey,
-            "type": content.type_as_str(),
-            "content": content.value_to_string(),
-        });
-        if let Some(prefix) = prefix {
-            payload["name"] = serde_json::Value::from(prefix);
-        }
-        if let Some(ttl) = ttl {
-            payload["ttl"] = serde_json::Value::from(ttl);
-        }
-        if let Some(prio) = prio {
-            payload["prio"] = serde_json::Value::from(prio);
-        }
+        let payload = self
+            .payload_builder()
+            .add("type", content.type_as_str())
+            .add("content", content.value_to_string())
+            .add_if_some("name", prefix)
+            .add_if_some("ttl", ttl)
+            .add_if_some("prio", prio)
+            .build();
 
-        self.client
-            .post(url)
-            .json(&payload)
-            .send()?
-            .error_for_status()?;
-
-        Ok(())
+        self.send_request(url, &payload)
     }
 
     pub fn edit_dns_by_name_type(
@@ -217,168 +268,110 @@ impl Client {
         content: &Content,
         ttl: Option<i64>,
         prio: Option<i64>,
-    ) -> Result<(), ApiError> {
+    ) -> Result<(), ClientError> {
         let (prefix, root) = split_domain(domain)?;
-        let url = self
-            .endpoint
-            .join("dns/editByNameType/")?
-            .join(&format!("{root}/"))?
-            .join(&format!("{}/", content.type_as_str()))?
-            .join(prefix.unwrap_or(""))?;
+        let url = self.build_url(&[
+            "dns",
+            "editByNameType",
+            root,
+            content.type_as_str(),
+            prefix.unwrap_or(""),
+        ])?;
 
-        let mut payload = json!({
-            "secretapikey": self.secretapikey,
-            "apikey": self.apikey,
-            "content": content.value_to_string(),
-        });
-        if let Some(ttl) = ttl {
-            payload["ttl"] = serde_json::Value::from(ttl);
-        }
-        if let Some(prio) = prio {
-            payload["prio"] = serde_json::Value::from(prio);
-        }
+        let payload = self
+            .payload_builder()
+            .add("content", content.value_to_string())
+            .add_if_some("ttl", ttl)
+            .add_if_some("prio", prio)
+            .build();
 
-        self.client
-            .post(url)
-            .json(&payload)
-            .send()?
-            .error_for_status()?;
-
-        Ok(())
+        self.send_request(url, &payload)
     }
 
-    pub fn delete_dns(&self, domain: &domain::Name, id: i64) -> Result<(), ApiError> {
+    pub fn delete_dns(&self, domain: &domain::Name, id: i64) -> Result<(), ClientError> {
         let (prefix, root) = split_domain(domain)?;
         if prefix.is_some() {
-            return Err(ApiError::Domain(DomainError::HasPrefix(domain.to_string())));
+            return Err(ClientError::Domain(DomainError::HasPrefix(
+                domain.to_string(),
+            )));
         }
 
-        let url = self
-            .endpoint
-            .join("dns/delete/")?
-            .join(&format!("{root}/"))?
-            .join(&id.to_string())?;
+        let url = self.build_url(&["dns", "delete", root, &id.to_string()])?;
 
-        let payload = json!({
-            "secretapikey": self.secretapikey,
-            "apikey": self.apikey,
-        });
+        let payload = self.payload_builder().build();
 
-        self.client
-            .post(url)
-            .json(&payload)
-            .send()?
-            .error_for_status()?;
-
-        Ok(())
+        self.send_request(url, &payload)
     }
 
     pub fn delete_dns_by_name_type(
         &self,
         domain: &domain::Name,
         type_: &Type,
-    ) -> Result<(), ApiError> {
+    ) -> Result<(), ClientError> {
         let (prefix, root) = split_domain(domain)?;
-        let url = self
-            .endpoint
-            .join("dns/deleteByNameType/")?
-            .join(&format!("{root}/"))?
-            .join(&format!("{}/", type_.as_str()))?
-            .join(prefix.unwrap_or(""))?;
+        let url = self.build_url(&[
+            "dns",
+            "deleteByNameType",
+            root,
+            type_.as_str(),
+            prefix.unwrap_or(""),
+        ])?;
 
-        let payload = json!({
-            "secretapikey": self.secretapikey,
-            "apikey": self.apikey,
-        });
+        let payload = self.payload_builder().build();
 
-        self.client
-            .post(url)
-            .json(&payload)
-            .send()?
-            .error_for_status()?;
-
-        Ok(())
+        self.send_request(url, &payload)
     }
 
     pub fn retrieve_dns(
         &self,
         domain: &domain::Name,
         id: Option<i64>,
-    ) -> Result<Vec<Record>, ApiError> {
+    ) -> Result<Vec<Record>, ClientError> {
         let (prefix, root) = split_domain(domain)?;
         if prefix.is_some() {
-            return Err(ApiError::Domain(DomainError::HasPrefix(domain.to_string())));
+            return Err(ClientError::Domain(DomainError::HasPrefix(
+                domain.to_string(),
+            )));
         }
 
-        let url = self
-            .endpoint
-            .join("dns/retrieve/")?
-            .join(&format!("{root}/"))?
-            .join(&id.map_or_else(|| "".to_string(), |id| id.to_string()))?;
+        let url = self.build_url(&[
+            "dns",
+            "retrieve",
+            root,
+            &id.map_or_else(|| "".to_string(), |id| id.to_string()),
+        ])?;
 
-        let payload = json!({
-            "secretapikey": self.secretapikey,
-            "apikey": self.apikey,
-        });
-
-        let resp = self
-            .client
-            .post(url)
-            .json(&payload)
-            .send()?
-            .error_for_status()?;
+        let payload = self.payload_builder().build();
 
         #[derive(Deserialize)]
         struct Response {
             records: Vec<Record>,
         }
 
-        let resp = resp.json::<Response>()?;
-
-        Ok(resp.records)
+        Ok(self.send_request::<Response>(url, &payload)?.records)
     }
 
     pub fn retrieve_dns_by_name_type(
         &self,
         domain: &domain::Name,
         type_: &Type,
-    ) -> Result<Vec<Record>, ApiError> {
+    ) -> Result<Vec<Record>, ClientError> {
         let (prefix, root) = split_domain(domain)?;
-        let url = self
-            .endpoint
-            .join("dns/retrieveByNameType/")?
-            .join(&format!("{root}/"))?
-            .join(&format!("{}/", type_.as_str()))?
-            .join(prefix.unwrap_or(""))?;
+        let url = self.build_url(&[
+            "dns",
+            "retrieveByNameType",
+            root,
+            type_.as_str(),
+            prefix.unwrap_or(""),
+        ])?;
 
-        let payload = json!({
-            "secretapikey": self.secretapikey,
-            "apikey": self.apikey,
-        });
-
-        let resp = self
-            .client
-            .post(url)
-            .json(&payload)
-            .send()?
-            .error_for_status()?;
+        let payload = self.payload_builder().build();
 
         #[derive(Deserialize)]
         struct Response {
             records: Vec<Record>,
         }
 
-        let resp = resp.json::<Response>()?;
-
-        Ok(resp.records)
+        Ok(self.send_request::<Response>(url, &payload)?.records)
     }
-}
-
-fn split_domain<'a>(name: &'a domain::Name) -> Result<(Option<&'a str>, &'a str), DomainError> {
-    let root = name
-        .root()
-        .ok_or_else(|| DomainError::MissingRoot(name.to_string()))?;
-    let prefix = name.prefix();
-
-    Ok((prefix, root))
 }
