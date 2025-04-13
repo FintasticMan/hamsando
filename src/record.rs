@@ -1,8 +1,13 @@
+//! Type-safe DNS record.
+
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use serde::Deserialize;
 use strum_macros::IntoStaticStr;
 
+use crate::ContentCreationError;
+
+/// Possible types a DNS record can have.
 #[derive(Debug, Deserialize, PartialEq, Eq, IntoStaticStr)]
 #[serde(rename_all = "UPPERCASE")]
 #[strum(serialize_all = "UPPERCASE")]
@@ -22,11 +27,14 @@ pub enum Type {
 }
 
 impl Type {
+    /// Gets the string representation of the type.
     pub fn as_str(&self) -> &'static str {
         self.into()
     }
+}
 
-    pub fn from(value: &Content) -> Self {
+impl From<Content> for Type {
+    fn from(value: Content) -> Self {
         match value {
             Content::A(_) => Type::A,
             Content::Mx(_) => Type::Mx,
@@ -44,6 +52,40 @@ impl Type {
     }
 }
 
+impl From<&Content> for Type {
+    fn from(value: &Content) -> Self {
+        match value {
+            Content::A(_) => Type::A,
+            Content::Mx(_) => Type::Mx,
+            Content::Cname(_) => Type::Cname,
+            Content::Alias(_) => Type::Alias,
+            Content::Txt(_) => Type::Txt,
+            Content::Ns(_) => Type::Ns,
+            Content::Aaaa(_) => Type::Aaaa,
+            Content::Srv(_) => Type::Srv,
+            Content::Tlsa(_) => Type::Tlsa,
+            Content::Caa(_) => Type::Caa,
+            Content::Https(_) => Type::Https,
+            Content::Svcb(_) => Type::Svcb,
+        }
+    }
+}
+
+/// The content value of a DNS record with type-safe variants for each type.
+///
+/// Ensures that each DNS record type contains the appropriate value format.
+///
+/// # Examples
+///
+/// ```
+/// use hamsando::record::Content;
+/// use std::net::{IpAddr, Ipv4Addr};
+///
+/// let ip: IpAddr = "127.0.0.1".parse().unwrap();
+/// let content: Content = ip.into();
+///
+/// assert_eq!(content, Content::A(Ipv4Addr::new(127, 0, 0, 1)));
+/// ```
 #[derive(Debug, PartialEq, Eq, IntoStaticStr)]
 #[strum(serialize_all = "UPPERCASE")]
 pub enum Content {
@@ -62,10 +104,12 @@ pub enum Content {
 }
 
 impl Content {
+    /// Gets the string representation of the type of the content.
     pub fn type_as_str(&self) -> &'static str {
         self.into()
     }
 
+    /// Converts the value in the content to a string.
     pub fn value_to_string(&self) -> String {
         match self {
             Content::A(addr) => addr.to_string(),
@@ -83,7 +127,8 @@ impl Content {
         }
     }
 
-    pub fn from(type_: &Type, content: &str) -> Result<Content, std::net::AddrParseError> {
+    /// Creates a `Content` from a [`Type`] and a string.
+    pub fn from(type_: &Type, content: &str) -> Result<Content, ContentCreationError> {
         Ok(match type_ {
             Type::A => Content::A(content.parse()?),
             Type::Mx => Content::Mx(content.to_string()),
@@ -129,6 +174,7 @@ impl<'de> Deserialize<'de> for Content {
     }
 }
 
+/// A DNS record.
 #[derive(Debug, Deserialize)]
 pub struct Record {
     #[serde(deserialize_with = "deserialize_to_i64")]
@@ -143,6 +189,7 @@ pub struct Record {
     pub notes: Option<String>,
 }
 
+/// Helper type for deserializing a string or an i64 to an i64.
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum StringOrI64 {
