@@ -27,6 +27,7 @@
 //! [hamsando-ddns]: https://github.com/FintasticMan/hamsando-ddns
 
 mod client;
+pub mod domain;
 mod errors;
 mod payload;
 pub mod record;
