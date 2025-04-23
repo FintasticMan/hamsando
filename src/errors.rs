@@ -1,6 +1,6 @@
 use std::net::AddrParseError;
 
-use reqwest::{blocking::Response, StatusCode};
+use reqwest::{StatusCode, blocking::Response};
 use serde::Deserialize;
 use thiserror::Error;
 

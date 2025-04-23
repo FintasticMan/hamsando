@@ -1,7 +1,12 @@
 [package]
 name = "hamsando"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+description = "A simple and type-safe client for the Porkbun API."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/FintasticMan/hamsando"
+keywords = ["api", "dns","porkbun"]
+categories = ["api-bindings", "web-programming::http-client"]
 
 [dependencies]
 addr = "0.15.6"
