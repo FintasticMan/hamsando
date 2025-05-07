@@ -1,3 +1,6 @@
+[workspace]
+members = ["dst"]
+
 [package]
 name = "hamsando"
 version = "0.1.0"
@@ -10,6 +13,7 @@ categories = ["api-bindings", "web-programming::http-client"]
 
 [dependencies]
 addr = "0.15.6"
+dst = { version = "0.1.0", path = "dst" }
 psl = "2.1.102"
 reqwest = { version = "0.12.15", features = ["blocking", "json"] }
 serde = { version = "1.0.219", features = ["derive"] }
