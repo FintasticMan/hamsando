@@ -10,6 +10,8 @@
 #[cfg(feature = "alloc")]
 extern crate alloc;
 
+mod errors;
+
 #[cfg(feature = "alloc")]
 use alloc::{
     alloc::{alloc, dealloc, handle_alloc_error},
@@ -21,6 +23,8 @@ use core::{
     error::Error,
     ptr,
 };
+
+pub use errors::*;
 
 /// A dynamically sized type.
 ///
@@ -109,22 +113,24 @@ pub unsafe trait AllocDst<T: ?Sized + Dst>: Sized {
     /// # Safety
     ///
     /// The `init` function may not panic, otherwise there will be a memory leak.
-    unsafe fn new_dst<F>(len: usize, init: F) -> Self
+    unsafe fn new_dst<F>(len: usize, init: F) -> Result<Self, AllocDstError>
     where
         F: FnOnce(ptr::NonNull<T>) -> ();
 }
 
+/// Blanket implementation for all types that implement [TryAllocDst].
 unsafe impl<A, T: ?Sized + Dst> AllocDst<T> for A
 where
     A: TryAllocDst<T>,
 {
-    unsafe fn new_dst<F>(len: usize, init: F) -> Self
+    unsafe fn new_dst<F>(len: usize, init: F) -> Result<Self, AllocDstError>
     where
         F: FnOnce(ptr::NonNull<T>) -> (),
     {
         match unsafe { Self::try_new_dst(len, |ptr| Ok::<(), Infallible>(init(ptr))) } {
-            Ok(value) => value,
-            Err(infallible) => match infallible {},
+            Ok(value) => Ok(value),
+            Err(TryAllocDstError::Layout(e)) => Err(AllocDstError::Layout(e)),
+            Err(TryAllocDstError::Init(infallible)) => match infallible {},
         }
     }
 }
@@ -142,18 +148,18 @@ pub unsafe trait TryAllocDst<T: ?Sized + Dst>: Sized + AllocDst<T> {
     /// # Safety
     ///
     /// The `init` function may not panic, otherwise there will be a memory leak.
-    unsafe fn try_new_dst<F, E: Error>(len: usize, init: F) -> Result<Self, E>
+    unsafe fn try_new_dst<F, E: Error>(len: usize, init: F) -> Result<Self, TryAllocDstError<E>>
     where
         F: FnOnce(ptr::NonNull<T>) -> Result<(), E>;
 }
 
 #[cfg(feature = "alloc")]
 unsafe impl<T: ?Sized + Dst> TryAllocDst<T> for Box<T> {
-    unsafe fn try_new_dst<F, E: Error>(len: usize, init: F) -> Result<Self, E>
+    unsafe fn try_new_dst<F, E: Error>(len: usize, init: F) -> Result<Self, TryAllocDstError<E>>
     where
         F: FnOnce(ptr::NonNull<T>) -> Result<(), E>,
     {
-        let layout = T::layout(len).expect("invalid layout");
+        let layout = T::layout(len)?;
 
         unsafe {
             let raw = if layout.size() == 0 {
@@ -170,7 +176,7 @@ unsafe impl<T: ?Sized + Dst> TryAllocDst<T> for Box<T> {
                     if layout.size() != 0 {
                         dealloc(raw.as_ptr(), layout);
                     }
-                    return Err(e);
+                    return Err(TryAllocDstError::Init(e));
                 }
             }
             Ok(Box::from_raw(ptr.as_ptr()))
@@ -190,6 +196,7 @@ mod tests {
             Box::new_dst(str.len(), |ptr: ptr::NonNull<str>| {
                 str.clone_to_raw(ptr);
             })
+            .unwrap()
         };
 
         assert_eq!(boxed.len(), str.len());
@@ -204,6 +211,7 @@ mod tests {
             Box::new_dst(arr.len(), |ptr: ptr::NonNull<[()]>| {
                 arr.clone_to_raw(ptr);
             })
+            .unwrap()
         };
 
         assert_eq!(boxed.len(), arr.len());
@@ -283,6 +291,7 @@ mod tests {
                 Box::new_dst(slice.len(), |ptr: ptr::NonNull<Self>| {
                     Self::write_to_raw(ptr, data1, data2, data3, slice)
                 })
+                .unwrap()
             }
         }
     }
@@ -306,7 +315,7 @@ mod tests {
     fn clone_test() {
         let v1 = Type::new(-12, 65537, 50, &[-2, 5, 20]);
 
-        let v2 = unsafe { Box::new_dst(v1.len(), |ptr| v1.clone_to_raw(ptr)) };
+        let v2 = unsafe { Box::new_dst(v1.len(), |ptr| v1.clone_to_raw(ptr)).unwrap() };
         assert_eq!(v2.data1, v1.data1);
         assert_eq!(v2.data2, v1.data2);
         assert_eq!(v2.data3, v1.data3);
