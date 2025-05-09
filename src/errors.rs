@@ -5,14 +5,6 @@ use serde::Deserialize;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
-pub enum DomainError {
-    #[error("domain {0:?} has a prefix")]
-    HasPrefix(String),
-    #[error("domain {0:?} doesn't have a root")]
-    MissingRoot(String),
-}
-
-#[derive(Error, Debug)]
 #[error("Porkbun API error: {status} - {message}")]
 pub struct ApiError {
     status: StatusCode,
@@ -43,8 +35,6 @@ impl ApiError {
 
 #[derive(Error, Debug)]
 pub enum ClientError {
-    #[error(transparent)]
-    Domain(#[from] DomainError),
     #[error(transparent)]
     Porkbun(#[from] ApiError),
     #[error(transparent)]

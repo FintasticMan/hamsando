@@ -1,26 +1,13 @@
 use std::net::IpAddr;
 
-use addr::domain;
 use reqwest::StatusCode;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use url::Url;
 
+use crate::domain::{Domain, Root};
 use crate::record::{self, Content, Record, Type};
-use crate::{ApiError, ClientBuilderError, ClientError, DomainError, Payload};
-
-/// Splits the given domain name into the root and the prefix, if there is one.
-///
-/// # Errors
-/// - `MissingRoot` if the given domain name has no root
-fn split_domain<'a>(name: &'a domain::Name) -> Result<(Option<&'a str>, &'a str), DomainError> {
-    let root = name
-        .root()
-        .ok_or_else(|| DomainError::MissingRoot(name.to_string()))?;
-    let prefix = name.prefix();
-
-    Ok((prefix, root))
-}
+use crate::{ApiError, ClientBuilderError, ClientError, Payload};
 
 /// Builder for a [Client] that handles default values.
 pub struct ClientBuilder {
@@ -166,19 +153,18 @@ impl Client {
 
     pub fn create_dns(
         &self,
-        domain: &domain::Name,
+        domain: &Domain,
         content: &Content,
         ttl: Option<i64>,
         prio: Option<i64>,
     ) -> Result<i64, ClientError> {
-        let (prefix, root) = split_domain(domain)?;
-        let url = self.build_url(&["dns", "create", root])?;
+        let url = self.build_url(&["dns", "create", domain.root()])?;
 
         let payload = self
             .payload()
             .add("type", content.type_as_str())
             .add("content", content.value_to_string())
-            .add_if_some("name", prefix)
+            .add_if_some("name", domain.prefix())
             .add_if_some("ttl", ttl)
             .add_if_some("prio", prio);
 
@@ -193,20 +179,19 @@ impl Client {
 
     pub fn edit_dns(
         &self,
-        domain: &domain::Name,
+        domain: &Domain,
         id: i64,
         content: &Content,
         ttl: Option<i64>,
         prio: Option<i64>,
     ) -> Result<(), ClientError> {
-        let (prefix, root) = split_domain(domain)?;
-        let url = self.build_url(&["dns", "edit", root, &id.to_string()])?;
+        let url = self.build_url(&["dns", "edit", domain.root(), &id.to_string()])?;
 
         let payload = self
             .payload()
             .add("type", content.type_as_str())
             .add("content", content.value_to_string())
-            .add_if_some("name", prefix)
+            .add_if_some("name", domain.prefix())
             .add_if_some("ttl", ttl)
             .add_if_some("prio", prio);
 
@@ -215,18 +200,17 @@ impl Client {
 
     pub fn edit_dns_by_name_type(
         &self,
-        domain: &domain::Name,
+        domain: &Domain,
         content: &Content,
         ttl: Option<i64>,
         prio: Option<i64>,
     ) -> Result<(), ClientError> {
-        let (prefix, root) = split_domain(domain)?;
         let url = self.build_url(&[
             "dns",
             "editByNameType",
-            root,
+            domain.root(),
             content.type_as_str(),
-            prefix.unwrap_or(""),
+            domain.prefix().unwrap_or(""),
         ])?;
 
         let payload = self
@@ -239,18 +223,7 @@ impl Client {
     }
 
     /// Deletes the DNS entry specified by the root of the domain name to be deleted, and its ID.
-    ///
-    /// # Errors
-    ///
-    /// Will return a `Domain` error in the case of the `domain` having a prefix.
-    pub fn delete_dns(&self, domain: &domain::Name, id: i64) -> Result<(), ClientError> {
-        let (prefix, root) = split_domain(domain)?;
-        if prefix.is_some() {
-            return Err(ClientError::Domain(DomainError::HasPrefix(
-                domain.to_string(),
-            )));
-        }
-
+    pub fn delete_dns(&self, root: &Root, id: i64) -> Result<(), ClientError> {
         let url = self.build_url(&["dns", "delete", root, &id.to_string()])?;
 
         let payload = self.payload();
@@ -260,16 +233,15 @@ impl Client {
 
     pub fn delete_dns_by_name_type(
         &self,
-        domain: &domain::Name,
+        domain: &Domain,
         type_: &Type,
     ) -> Result<(), ClientError> {
-        let (prefix, root) = split_domain(domain)?;
         let url = self.build_url(&[
             "dns",
             "deleteByNameType",
-            root,
+            domain.root(),
             type_.as_str(),
-            prefix.unwrap_or(""),
+            domain.prefix().unwrap_or(""),
         ])?;
 
         let payload = self.payload();
@@ -278,22 +250,7 @@ impl Client {
     }
 
     /// Retrieves the DNS entry specified by the root of the domain name, and its ID.
-    ///
-    /// # Errors
-    ///
-    /// Will return a `Domain` error in the case of the `domain` having a prefix.
-    pub fn retrieve_dns(
-        &self,
-        domain: &domain::Name,
-        id: Option<i64>,
-    ) -> Result<Vec<Record>, ClientError> {
-        let (prefix, root) = split_domain(domain)?;
-        if prefix.is_some() {
-            return Err(ClientError::Domain(DomainError::HasPrefix(
-                domain.to_string(),
-            )));
-        }
-
+    pub fn retrieve_dns(&self, root: &Root, id: Option<i64>) -> Result<Vec<Record>, ClientError> {
         let url = self.build_url(&[
             "dns",
             "retrieve",
@@ -313,16 +270,15 @@ impl Client {
 
     pub fn retrieve_dns_by_name_type(
         &self,
-        domain: &domain::Name,
+        domain: &Domain,
         type_: &Type,
     ) -> Result<Vec<Record>, ClientError> {
-        let (prefix, root) = split_domain(domain)?;
         let url = self.build_url(&[
             "dns",
             "retrieveByNameType",
-            root,
+            domain.root(),
             type_.as_str(),
-            prefix.unwrap_or(""),
+            domain.prefix().unwrap_or(""),
         ])?;
 
         let payload = self.payload();
