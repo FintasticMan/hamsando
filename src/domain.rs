@@ -3,9 +3,8 @@ use core::{
     str::{self, FromStr},
 };
 
-use dst::{AllocDst, AllocDstError};
-use dst_derive::Dst;
 use psl::Psl;
+use simple_dst::{AllocDst, AllocDstError, Dst};
 use thiserror::Error;
 
 const MAX_DOMAIN_LEN: usize = 253;

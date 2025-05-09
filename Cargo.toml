@@ -1,5 +1,5 @@
 [workspace]
-members = ["dst", "dst-derive"]
+members = []
 
 [package]
 name = "hamsando"
@@ -12,13 +12,12 @@ keywords = ["api", "dns","porkbun"]
 categories = ["api-bindings", "web-programming::http-client"]
 
 [dependencies]
-dst = { version = "0.1.0", path = "dst" }
-dst-derive = { version = "0.1.0", path = "dst-derive" }
-psl = "2.1.102"
+psl = "2.1"
 reqwest = { version = "0.12.15", features = ["blocking", "json"] }
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.140"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+simple-dst = { git = "https://github.com/FintasticMan/simple-dst.git", version = "0.1.0" }
 strum = "0.27.1"
 strum_macros = "0.27.1"
-thiserror = "2.0.12"
-url = { version = "2.5.4", features = ["serde"] }
+thiserror = "2.0"
+url = { version = "2.5", features = ["serde"] }
