@@ -89,11 +89,11 @@ impl Type {
         let (data1_offset, data2_offset, data3_offset, slice_offset) =
             (offsets[0], offsets[1], offsets[2], offsets[3]);
         unsafe {
-            let raw = ptr.as_ptr().cast::<u8>();
-            ptr::write(raw.add(data1_offset).cast(), data1);
-            ptr::write(raw.add(data2_offset).cast(), data2);
-            ptr::write(raw.add(data3_offset).cast(), data3);
-            ptr::copy_nonoverlapping(slice.as_ptr(), raw.add(slice_offset).cast(), slice.len());
+            let raw = ptr.cast::<u8>();
+            ptr::write(raw.add(data1_offset).cast().as_ptr(), data1);
+            ptr::write(raw.add(data2_offset).cast().as_ptr(), data2);
+            ptr::write(raw.add(data3_offset).cast().as_ptr(), data3);
+            slice.clone_to_raw(<[i128]>::retype(raw.add(slice_offset), slice.len()));
             assert_eq!(Layout::for_value(ptr.as_ref()), layout);
         }
     }
