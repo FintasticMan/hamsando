@@ -724,9 +724,9 @@ dependencies = [
 
 [[package]]
 name = "psl"
-version = "2.1.107"
+version = "2.1.108"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "36d3257075f822569e43169391d51c0483196d37dc21c14807228f4dd1a76545"
+checksum = "b4d0b873458f19667df558849359edcc4786da36ce54c8668fd5d1c36c22b080"
 dependencies = [
  "psl-types",
 ]
@@ -863,9 +863,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.2"
+version = "0.103.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7149975849f1abb3832b246010ef62ccc80d3a76169517ada7188252b9cfb437"
+checksum = "e4a72fe2bcf7a6ac6fd7d0b9e5cb68aeb7d4c0a0271730218b3e92d43b4eb435"
 dependencies = [
  "ring",
  "rustls-pki-types",
@@ -969,7 +969,7 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 [[package]]
 name = "simple-dst"
 version = "0.1.0"
-source = "git+https://github.com/FintasticMan/simple-dst.git#ec047bfb4f1e10ca96d090a9b5cd5b9bee912fbb"
+source = "git+https://github.com/FintasticMan/simple-dst.git#f4bd2d3c90443a8e6e1c5e13f659d222e09da65a"
 dependencies = [
  "simple-dst-derive",
 ]
@@ -977,7 +977,7 @@ dependencies = [
 [[package]]
 name = "simple-dst-derive"
 version = "0.1.0"
-source = "git+https://github.com/FintasticMan/simple-dst.git#ec047bfb4f1e10ca96d090a9b5cd5b9bee912fbb"
+source = "git+https://github.com/FintasticMan/simple-dst.git#f4bd2d3c90443a8e6e1c5e13f659d222e09da65a"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1094,9 +1094,9 @@ dependencies = [
 
 [[package]]
 name = "tempfile"
-version = "3.19.1"
+version = "3.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7437ac7763b9b123ccf33c338a5cc1bac6f69b45a136c19bdd8a65e3916435bf"
+checksum = "e8a64e3985349f2441a1a9ef0b853f869006c3855f2cda6862a94d26ebb9d6a1"
 dependencies = [
  "fastrand",
  "getrandom 0.3.3",

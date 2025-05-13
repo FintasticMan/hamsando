@@ -1,4 +1,5 @@
 use core::{
+    alloc::LayoutError,
     ops::Deref,
     str::{self, FromStr},
 };
@@ -10,7 +11,7 @@ use thiserror::Error;
 const MAX_DOMAIN_LEN: usize = 253;
 const MAX_LABEL_LEN: usize = 63;
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, PartialEq, Eq)]
 pub enum DomainCreationError {
     #[error("domain is empty")]
     Empty,
@@ -30,7 +31,7 @@ pub enum DomainCreationError {
     #[error("{0}: domain has an unknown suffix, {1}")]
     UnknownSuffix(String, String),
     #[error(transparent)]
-    Alloc(#[from] AllocDstError),
+    Alloc(#[from] AllocDstError<LayoutError>),
 }
 
 fn get_domain(s: &str) -> &str {
@@ -84,7 +85,7 @@ fn parse_domain(domain: &str) -> Result<(Option<usize>, usize), DomainCreationEr
 }
 
 #[repr(C)]
-#[derive(Dst, Debug)]
+#[derive(Dst, Debug, PartialEq, Eq)]
 pub struct Root {
     suffix_separator_index: usize,
     root: str,
@@ -102,7 +103,7 @@ impl Root {
             return Err(DomainCreationError::HasPrefix(root.to_string()));
         }
 
-        Ok(Self::alloc(suffix_separator_index, root)?)
+        Ok(Self::new_internal(suffix_separator_index, root)?)
     }
 
     pub fn as_str(&self) -> &str {
@@ -145,7 +146,7 @@ impl TryFrom<&str> for Box<Root> {
 }
 
 #[repr(C)]
-#[derive(Dst, Debug)]
+#[derive(Dst, Debug, PartialEq, Eq)]
 pub struct Domain {
     root_separator_index: Option<usize>,
     suffix_separator_index: usize,
@@ -161,7 +162,7 @@ impl Domain {
 
         let (root_separator_index, suffix_separator_index) = parse_domain(domain)?;
 
-        Ok(Self::alloc(
+        Ok(Self::new_internal(
             root_separator_index,
             suffix_separator_index,
             domain,
@@ -181,14 +182,14 @@ impl Domain {
         &self.domain[offset..]
     }
 
-    pub fn alloc_root<A>(&self) -> Result<A, AllocDstError>
+    pub fn alloc_root<A>(&self) -> Result<A, AllocDstError<LayoutError>>
     where
         A: AllocDst<Root>,
     {
         let offset = self.root_separator_index.map(|i| i + 1).unwrap_or(0);
         let root = &self.domain[offset..];
         let suffix_separator_index = self.suffix_separator_index - offset;
-        Root::alloc(suffix_separator_index, root)
+        Root::new_internal(suffix_separator_index, root)
     }
 
     pub fn suffix(&self) -> &str {
