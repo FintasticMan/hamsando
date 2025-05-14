@@ -9,9 +9,8 @@ Ensures that correct values are supplied using the Rust type system.
 
 See [hamsando-ddns] for an implementation of a dynamic DNS program using this crate.
 
-```
-use addr::parse_domain_name;
-use hamsando::Client;
+```rust
+use hamsando::{domain::Domain, Client};
 
 let client = Client::builder()
     .apikey("<APIKEY>")
@@ -21,7 +20,7 @@ let client = Client::builder()
 
 let my_ip = client.test_auth().unwrap();
 
-let domain = parse_domain_name("example.com").unwrap();
+let domain: Box<Domain> = "example.com".parse().unwrap();
 let record_id = client.create_dns(&domain, &my_ip.into(), None, None).unwrap();
 ```
 

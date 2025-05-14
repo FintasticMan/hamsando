@@ -969,7 +969,7 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 [[package]]
 name = "simple-dst"
 version = "0.1.0"
-source = "git+https://github.com/FintasticMan/simple-dst.git#f4bd2d3c90443a8e6e1c5e13f659d222e09da65a"
+source = "git+https://github.com/FintasticMan/simple-dst.git#9b1d6307fdc6744dbdd279d23036b042c3cd459d"
 dependencies = [
  "simple-dst-derive",
 ]
@@ -977,7 +977,7 @@ dependencies = [
 [[package]]
 name = "simple-dst-derive"
 version = "0.1.0"
-source = "git+https://github.com/FintasticMan/simple-dst.git#f4bd2d3c90443a8e6e1c5e13f659d222e09da65a"
+source = "git+https://github.com/FintasticMan/simple-dst.git#9b1d6307fdc6744dbdd279d23036b042c3cd459d"
 dependencies = [
  "proc-macro2",
  "quote",

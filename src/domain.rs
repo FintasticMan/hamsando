@@ -1,5 +1,4 @@
 use core::{
-    alloc::LayoutError,
     ops::Deref,
     str::{self, FromStr},
 };
@@ -31,7 +30,7 @@ pub enum DomainCreationError {
     #[error("{0}: domain has an unknown suffix, {1}")]
     UnknownSuffix(String, String),
     #[error(transparent)]
-    Alloc(#[from] AllocDstError<LayoutError>),
+    Alloc(#[from] AllocDstError),
 }
 
 fn get_domain(s: &str) -> &str {
@@ -182,7 +181,7 @@ impl Domain {
         &self.domain[offset..]
     }
 
-    pub fn alloc_root<A>(&self) -> Result<A, AllocDstError<LayoutError>>
+    pub fn new_root<A>(&self) -> Result<A, AllocDstError>
     where
         A: AllocDst<Root>,
     {
