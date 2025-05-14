@@ -1,9 +1,11 @@
 use core::{
+    hash::Hash,
     ops::Deref,
     str::{self, FromStr},
 };
 
 use psl::Psl;
+use serde::Deserialize;
 use simple_dst::{AllocDst, AllocDstError, Dst};
 use thiserror::Error;
 
@@ -84,13 +86,16 @@ fn parse_domain(domain: &str) -> Result<(Option<usize>, usize), DomainCreationEr
 }
 
 #[repr(C)]
-#[derive(Dst, Debug, PartialEq, Eq)]
+#[derive(Dst, Debug)]
 pub struct Root {
+    root_separator_index: Option<usize>,
     suffix_separator_index: usize,
-    root: str,
+    domain: str,
 }
 
 impl Root {
+    /// This function will return an error if the input is not just the root
+    /// part of a domain.
     pub fn parse<A>(input: &str) -> Result<A, DomainCreationError>
     where
         A: AllocDst<Self>,
@@ -102,21 +107,26 @@ impl Root {
             return Err(DomainCreationError::HasPrefix(root.to_string()));
         }
 
-        Ok(Self::new_internal(suffix_separator_index, root)?)
+        Ok(Self::new_internal(
+            root_separator_index,
+            suffix_separator_index,
+            root,
+        )?)
     }
 
     pub fn as_str(&self) -> &str {
-        &self.root
+        let offset = self.root_separator_index.map(|i| i + 1).unwrap_or(0);
+        &self.domain[offset..]
     }
 
     pub fn suffix(&self) -> &str {
-        &self.root[self.suffix_separator_index + 1..]
+        &self.domain[self.suffix_separator_index + 1..]
     }
 }
 
 impl AsRef<str> for Root {
     fn as_ref(&self) -> &str {
-        &self.root
+        self.as_str()
     }
 }
 
@@ -124,7 +134,33 @@ impl Deref for Root {
     type Target = str;
 
     fn deref(&self) -> &Self::Target {
-        &self.root
+        self.as_str()
+    }
+}
+
+impl PartialEq for Root {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl Eq for Root {}
+
+impl PartialOrd for Root {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Root {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.as_str().cmp(other.as_str())
+    }
+}
+
+impl Hash for Root {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.as_str().hash(state);
     }
 }
 
@@ -144,8 +180,20 @@ impl TryFrom<&str> for Box<Root> {
     }
 }
 
+impl<'de> Deserialize<'de> for Box<Root> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error;
+
+        let s = <&str>::deserialize(deserializer)?;
+        s.parse::<Self>().map_err(D::Error::custom)
+    }
+}
+
 #[repr(C)]
-#[derive(Dst, Debug, PartialEq, Eq)]
+#[derive(Dst, Debug)]
 pub struct Domain {
     root_separator_index: Option<usize>,
     suffix_separator_index: usize,
@@ -176,19 +224,10 @@ impl Domain {
         self.root_separator_index.map(|i| &self.domain[..i])
     }
 
-    pub fn root(&self) -> &str {
-        let offset = self.root_separator_index.map(|i| i + 1).unwrap_or(0);
-        &self.domain[offset..]
-    }
-
-    pub fn new_root<A>(&self) -> Result<A, AllocDstError>
-    where
-        A: AllocDst<Root>,
-    {
-        let offset = self.root_separator_index.map(|i| i + 1).unwrap_or(0);
-        let root = &self.domain[offset..];
-        let suffix_separator_index = self.suffix_separator_index - offset;
-        Root::new_internal(suffix_separator_index, root)
+    pub fn root(&self) -> &Root {
+        // SAFETY: Domain and Root have the exact same fields in the same order
+        // and are both repr(C), meaning that they have the same layout.
+        unsafe { &*((&raw const *self) as *const Root) }
     }
 
     pub fn suffix(&self) -> &str {
@@ -198,7 +237,7 @@ impl Domain {
 
 impl AsRef<str> for Domain {
     fn as_ref(&self) -> &str {
-        &self.domain
+        self.as_str()
     }
 }
 
@@ -206,7 +245,33 @@ impl Deref for Domain {
     type Target = str;
 
     fn deref(&self) -> &Self::Target {
-        &self.domain
+        self.as_str()
+    }
+}
+
+impl PartialEq for Domain {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl Eq for Domain {}
+
+impl PartialOrd for Domain {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Domain {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.as_str().cmp(other.as_str())
+    }
+}
+
+impl Hash for Domain {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.as_str().hash(state);
     }
 }
 
@@ -223,5 +288,17 @@ impl TryFrom<&str> for Box<Domain> {
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         Domain::parse(value)
+    }
+}
+
+impl<'de> Deserialize<'de> for Box<Domain> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error;
+
+        let s = <&str>::deserialize(deserializer)?;
+        s.parse::<Self>().map_err(D::Error::custom)
     }
 }
