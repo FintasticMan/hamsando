@@ -5,7 +5,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use serde::Deserialize;
 use strum_macros::IntoStaticStr;
 
-use crate::ContentCreationError;
+use crate::{ContentCreationError, domain::Domain};
 
 /// Possible types a DNS record can have.
 #[derive(Debug, Deserialize, PartialEq, Eq, IntoStaticStr)]
@@ -179,7 +179,7 @@ impl<'de> Deserialize<'de> for Content {
 pub struct Record {
     #[serde(deserialize_with = "deserialize_to_i64")]
     pub id: i64,
-    pub name: String,
+    pub name: Box<Domain>,
     #[serde(flatten)]
     pub content: Content,
     #[serde(deserialize_with = "deserialize_to_i64")]
