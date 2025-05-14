@@ -192,10 +192,26 @@ impl<'de> Deserialize<'de> for Box<Root> {
     where
         D: serde::Deserializer<'de>,
     {
-        use serde::de::Error;
+        use serde::de::Visitor;
 
-        let s = <&str>::deserialize(deserializer)?;
-        s.parse::<Self>().map_err(D::Error::custom)
+        struct RootVisitor;
+
+        impl<'de> Visitor<'de> for RootVisitor {
+            type Value = Box<Root>;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a string representing a domain root")
+            }
+
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                v.parse::<Box<Root>>().map_err(E::custom)
+            }
+        }
+
+        deserializer.deserialize_str(RootVisitor)
     }
 }
 
@@ -309,9 +325,25 @@ impl<'de> Deserialize<'de> for Box<Domain> {
     where
         D: serde::Deserializer<'de>,
     {
-        use serde::de::Error;
+        use serde::de::Visitor;
 
-        let s = <&str>::deserialize(deserializer)?;
-        s.parse::<Self>().map_err(D::Error::custom)
+        struct DomainVisitor;
+
+        impl<'de> Visitor<'de> for DomainVisitor {
+            type Value = Box<Domain>;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a string representing a domain")
+            }
+
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                v.parse::<Box<Domain>>().map_err(E::custom)
+            }
+        }
+
+        deserializer.deserialize_str(DomainVisitor)
     }
 }

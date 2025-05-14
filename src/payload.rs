@@ -35,3 +35,9 @@ impl From<Payload> for JsonValue {
         JsonValue::Object(value.payload)
     }
 }
+
+impl From<Payload> for JsonMap<String, JsonValue> {
+    fn from(value: Payload) -> Self {
+        value.payload
+    }
+}
