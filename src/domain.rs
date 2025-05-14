@@ -1,4 +1,5 @@
 use core::{
+    fmt::Display,
     hash::Hash,
     ops::Deref,
     str::{self, FromStr},
@@ -147,20 +148,26 @@ impl PartialEq for Root {
 impl Eq for Root {}
 
 impl PartialOrd for Root {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for Root {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         self.as_str().cmp(other.as_str())
     }
 }
 
 impl Hash for Root {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         self.as_str().hash(state);
+    }
+}
+
+impl Display for Root {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.as_str().fmt(f)
     }
 }
 
@@ -258,20 +265,26 @@ impl PartialEq for Domain {
 impl Eq for Domain {}
 
 impl PartialOrd for Domain {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for Domain {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         self.as_str().cmp(other.as_str())
     }
 }
 
 impl Hash for Domain {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         self.as_str().hash(state);
+    }
+}
+
+impl Display for Domain {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.as_str().fmt(f)
     }
 }
 
