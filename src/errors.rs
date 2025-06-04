@@ -1,6 +1,6 @@
 use std::net::AddrParseError;
 
-use reqwest::{StatusCode, blocking::Response};
+use reqwest::{Response, StatusCode, blocking::Response as BlockingResponse};
 use serde::Deserialize;
 use thiserror::Error;
 
@@ -13,7 +13,28 @@ pub struct ApiError {
 
 impl ApiError {
     /// Converts the response from a Porkbun API request to an `ApiError`.
-    pub(crate) fn from_response(resp: Response) -> Self {
+    pub(crate) async fn from_response(resp: Response) -> Self {
+        #[derive(Deserialize)]
+        struct ErrorResp {
+            message: String,
+        }
+
+        let status = resp.status();
+        let text = resp
+            .text()
+            .await
+            .unwrap_or_else(|e| format!("unable to read response body: {e}"));
+
+        let message = serde_json::from_str::<ErrorResp>(&text).map_or_else(
+            |e| format!("unable to get error message from {text:?}: {e}"),
+            |r| r.message,
+        );
+
+        Self { status, message }
+    }
+
+    /// Converts the response from a Porkbun API request to an `ApiError`.
+    pub(crate) fn from_blocking_response(resp: BlockingResponse) -> Self {
         #[derive(Deserialize)]
         struct ErrorResp {
             message: String,

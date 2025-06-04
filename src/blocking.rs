@@ -84,7 +84,7 @@ pub struct Client {
     endpoint: Url,
     apikey: String,
     secretapikey: String,
-    client: reqwest::Client,
+    client: reqwest::blocking::Client,
 }
 
 impl Client {
@@ -94,7 +94,7 @@ impl Client {
             endpoint,
             apikey,
             secretapikey,
-            client: reqwest::Client::new(),
+            client: reqwest::blocking::Client::new(),
         }
     }
 
@@ -111,7 +111,7 @@ impl Client {
     }
 
     /// Sends a POST request to the given url with the given payload.
-    async fn send_request<T: for<'de> Deserialize<'de>>(
+    fn send_request<T: for<'de> Deserialize<'de>>(
         &self,
         url: Url,
         payload: Payload,
@@ -120,12 +120,11 @@ impl Client {
             .client
             .post(url)
             .json(&JsonValue::from(payload))
-            .send()
-            .await?;
+            .send()?;
         if resp.status() != StatusCode::OK {
-            return Err(ClientError::Porkbun(ApiError::from_response(resp).await));
+            return Err(ClientError::Porkbun(ApiError::from_blocking_response(resp)));
         }
-        Ok(resp.json().await?)
+        Ok(resp.json()?)
     }
 
     /// Returns a payload for sending to the Porkbun API.
@@ -138,7 +137,7 @@ impl Client {
     /// Calls the endpoint that tests if the authorization is correct.
     ///
     /// Also returns the caller's public IP address.
-    pub async fn test_auth(&self) -> Result<IpAddr, ClientError> {
+    pub fn test_auth(&self) -> Result<IpAddr, ClientError> {
         let url = self.build_url(&["ping"])?;
 
         let payload = self.payload();
@@ -149,10 +148,10 @@ impl Client {
             your_ip: IpAddr,
         }
 
-        Ok(self.send_request::<Response>(url, payload).await?.your_ip)
+        Ok(self.send_request::<Response>(url, payload)?.your_ip)
     }
 
-    pub async fn create_dns(
+    pub fn create_dns(
         &self,
         domain: &Domain,
         content: &Content,
@@ -175,10 +174,10 @@ impl Client {
             id: i64,
         }
 
-        Ok(self.send_request::<Response>(url, payload).await?.id)
+        Ok(self.send_request::<Response>(url, payload)?.id)
     }
 
-    pub async fn edit_dns(
+    pub fn edit_dns(
         &self,
         domain: &Domain,
         id: i64,
@@ -196,10 +195,10 @@ impl Client {
             .add_if_some("ttl", ttl)
             .add_if_some("prio", prio);
 
-        self.send_request(url, payload).await
+        self.send_request(url, payload)
     }
 
-    pub async fn edit_dns_by_name_type(
+    pub fn edit_dns_by_name_type(
         &self,
         domain: &Domain,
         content: &Content,
@@ -220,19 +219,19 @@ impl Client {
             .add_if_some("ttl", ttl)
             .add_if_some("prio", prio);
 
-        self.send_request(url, payload).await
+        self.send_request(url, payload)
     }
 
     /// Deletes the DNS entry specified by the root of the domain name to be deleted, and its ID.
-    pub async fn delete_dns(&self, root: &Root, id: i64) -> Result<(), ClientError> {
+    pub fn delete_dns(&self, root: &Root, id: i64) -> Result<(), ClientError> {
         let url = self.build_url(&["dns", "delete", root, &id.to_string()])?;
 
         let payload = self.payload();
 
-        self.send_request(url, payload).await
+        self.send_request(url, payload)
     }
 
-    pub async fn delete_dns_by_name_type(
+    pub fn delete_dns_by_name_type(
         &self,
         domain: &Domain,
         type_: &Type,
@@ -247,15 +246,11 @@ impl Client {
 
         let payload = self.payload();
 
-        self.send_request(url, payload).await
+        self.send_request(url, payload)
     }
 
     /// Retrieves the DNS entry specified by the root of the domain name, and its ID.
-    pub async fn retrieve_dns(
-        &self,
-        root: &Root,
-        id: Option<i64>,
-    ) -> Result<Vec<Record>, ClientError> {
+    pub fn retrieve_dns(&self, root: &Root, id: Option<i64>) -> Result<Vec<Record>, ClientError> {
         let url = self.build_url(&[
             "dns",
             "retrieve",
@@ -270,10 +265,10 @@ impl Client {
             records: Vec<Record>,
         }
 
-        Ok(self.send_request::<Response>(url, payload).await?.records)
+        Ok(self.send_request::<Response>(url, payload)?.records)
     }
 
-    pub async fn retrieve_dns_by_name_type(
+    pub fn retrieve_dns_by_name_type(
         &self,
         domain: &Domain,
         type_: &Type,
@@ -293,6 +288,6 @@ impl Client {
             records: Vec<Record>,
         }
 
-        Ok(self.send_request::<Response>(url, payload).await?.records)
+        Ok(self.send_request::<Response>(url, payload)?.records)
     }
 }

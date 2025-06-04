@@ -1,6 +1,10 @@
 //! Type-safe DNS record.
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::{
+    error::Error,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    str::FromStr,
+};
 
 use serde::Deserialize;
 use strum_macros::IntoStaticStr;
@@ -177,49 +181,55 @@ impl<'de> Deserialize<'de> for Content {
 /// A DNS record.
 #[derive(Debug, Deserialize)]
 pub struct Record {
-    #[serde(deserialize_with = "deserialize_to_i64")]
+    #[serde(deserialize_with = "deserialize_string_or_t")]
     pub id: i64,
     pub name: Box<Domain>,
     #[serde(flatten)]
     pub content: Content,
-    #[serde(deserialize_with = "deserialize_to_i64")]
+    #[serde(deserialize_with = "deserialize_string_or_t")]
     pub ttl: i64,
-    #[serde(deserialize_with = "deserialize_to_option_i64")]
+    #[serde(deserialize_with = "deserialize_option_string_or_t")]
     pub prio: Option<i64>,
     pub notes: Option<String>,
 }
 
-/// Helper type for deserializing a string or an i64 to an i64.
+/// Helper type for deserializing a string or any T to a T.
 #[derive(Deserialize)]
 #[serde(untagged)]
-enum StringOrI64 {
-    I64(i64),
+enum StringOr<T> {
     String(String),
+    T(T),
 }
 
-pub(crate) fn deserialize_to_i64<'de, D>(deserializer: D) -> Result<i64, D::Error>
+pub(crate) fn deserialize_string_or_t<'de, D, T: FromStr + Deserialize<'de>>(
+    deserializer: D,
+) -> Result<T, D::Error>
 where
     D: serde::Deserializer<'de>,
+    <T as FromStr>::Err: Error,
 {
     use serde::de::Error;
 
-    let string_or_i64 = StringOrI64::deserialize(deserializer)?;
-    Ok(match string_or_i64 {
-        StringOrI64::I64(i) => i,
-        StringOrI64::String(s) => s.parse().map_err(D::Error::custom)?,
+    let string_or_t = StringOr::<T>::deserialize(deserializer)?;
+    Ok(match string_or_t {
+        StringOr::<T>::String(s) => s.parse().map_err(D::Error::custom)?,
+        StringOr::<T>::T(t) => t,
     })
 }
 
-pub(crate) fn deserialize_to_option_i64<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+pub(crate) fn deserialize_option_string_or_t<'de, D, T: FromStr + Deserialize<'de>>(
+    deserializer: D,
+) -> Result<Option<T>, D::Error>
 where
     D: serde::Deserializer<'de>,
+    <T as FromStr>::Err: Error,
 {
     use serde::de::Error;
 
-    let string_or_i64 = Option::<StringOrI64>::deserialize(deserializer)?;
+    let string_or_i64 = Option::<StringOr<T>>::deserialize(deserializer)?;
     Ok(match string_or_i64 {
-        Some(StringOrI64::I64(i)) => Some(i),
-        Some(StringOrI64::String(s)) => Some(s.parse().map_err(D::Error::custom)?),
+        Some(StringOr::<T>::String(s)) => Some(s.parse().map_err(D::Error::custom)?),
+        Some(StringOr::<T>::T(t)) => Some(t),
         None => None,
     })
 }

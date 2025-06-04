@@ -8,11 +8,11 @@
 //! See [hamsando-ddns] for an implementation of a dynamic DNS program using this crate.
 //!
 //! ```
-//! use hamsando::{domain::Domain, Client};
+//! use hamsando::{domain::Domain, blocking::Client};
 //!
 //! let client = Client::builder()
-//!     .apikey("<APIKEY>")
-//!     .secretapikey("<SECRETAPIKEY>")
+//!     .apikey("<APIKEY>".to_string())
+//!     .secretapikey("<SECRETAPIKEY>".to_string())
 //!     .build()
 //!     .unwrap();
 //!
@@ -25,6 +25,7 @@
 //! [Porkbun API]: https://porkbun.com/api/json/v3/documentation
 //! [hamsando-ddns]: https://github.com/FintasticMan/hamsando-ddns
 
+pub mod blocking;
 mod client;
 pub mod domain;
 mod errors;
