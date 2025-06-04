@@ -1,7 +1,7 @@
-use crate::domain::*;
+use super::*;
 
 #[test]
-fn test_root_parsing() {
+fn root_parsing() {
     // Valid cases
     assert_eq!(
         Root::parse::<Box<_>>("example.com").unwrap().as_str(),
@@ -17,46 +17,63 @@ fn test_root_parsing() {
     );
     assert_eq!(
         Root::parse::<Box<_>>("example.com.").unwrap().as_str(),
-        "example.com"
+        "example.com."
     ); // trailing dot
+    assert_eq!(
+        Root::parse::<Box<_>>("example.com.")
+            .unwrap()
+            .not_fqdn()
+            .as_str(),
+        "example.com"
+    ); // remove trailing dot
 
     // Invalid cases
     assert_eq!(
         Root::parse::<Box<_>>("www.example.com"),
-        Err(DomainCreationError::HasPrefix(
-            "www.example.com".to_string()
-        ))
+        Err(DomainCreateError::Parse(DomainParseError::HasPrefix {
+            domain: "www.example.com".to_string(),
+            prefix: "www".to_string(),
+        }))
     );
     assert_eq!(
         Root::parse::<Box<_>>(".example.com"),
-        Err(DomainCreationError::EmptyLabel(".example.com".to_string()))
+        Err(DomainCreateError::Parse(DomainParseError::EmptyLabel {
+            domain: ".example.com".to_string()
+        }))
     );
     assert_eq!(
         Root::parse::<Box<_>>("com"),
-        Err(DomainCreationError::MissingRoot("com".to_string()))
+        Err(DomainCreateError::Parse(DomainParseError::MissingRoot {
+            domain: "com".to_string()
+        }))
     );
-    assert_eq!(Root::parse::<Box<_>>(""), Err(DomainCreationError::Empty));
+    assert_eq!(
+        Root::parse::<Box<_>>(""),
+        Err(DomainCreateError::Parse(DomainParseError::Empty))
+    );
 
     // Test for overly long domain
     let too_long_domain = "a.".repeat(254) + ".com";
     assert_eq!(
         Root::parse::<Box<_>>(&too_long_domain),
-        Err(DomainCreationError::TooLong(too_long_domain.to_string()))
+        Err(DomainCreateError::Parse(DomainParseError::TooLong {
+            domain: too_long_domain.to_string()
+        }))
     );
 
     // Test for overly long label
     let too_long_label = "a".repeat(64) + ".com";
     assert_eq!(
         Root::parse::<Box<_>>(&too_long_label),
-        Err(DomainCreationError::TooLongLabel(
-            too_long_label.to_string(),
-            "a".repeat(64)
-        ))
+        Err(DomainCreateError::Parse(DomainParseError::TooLongLabel {
+            domain: too_long_label.to_string(),
+            label: "a".repeat(64)
+        }))
     );
 }
 
 #[test]
-fn test_root_methods() {
+fn root_methods() {
     let root = Root::parse::<Box<_>>("example.com").unwrap();
     assert_eq!(root.as_str(), "example.com");
     assert_eq!(root.suffix(), "com");
@@ -67,7 +84,7 @@ fn test_root_methods() {
 }
 
 #[test]
-fn test_domain_parsing() {
+fn domain_parsing() {
     // Valid cases
     let domain = Domain::parse::<Box<_>>("example.com").unwrap();
     assert_eq!(domain.as_str(), "example.com");
@@ -95,51 +112,59 @@ fn test_domain_parsing() {
     assert_eq!(multi_prefix.suffix(), "org");
 
     // Invalid cases
-    assert_eq!(Domain::parse::<Box<_>>(""), Err(DomainCreationError::Empty));
+    assert_eq!(
+        Domain::parse::<Box<_>>(""),
+        Err(DomainCreateError::Parse(DomainParseError::Empty))
+    );
 
-    // Test for missing suffix
+    // Test for unknown suffix
     let invalid_domain = "example.invalid";
     assert_eq!(
         Domain::parse::<Box<_>>(invalid_domain),
-        Err(DomainCreationError::UnknownSuffix(
-            invalid_domain.to_string(),
-            "invalid".to_string()
-        ))
+        Err(DomainCreateError::Parse(DomainParseError::UnknownSuffix {
+            domain: invalid_domain.to_string(),
+            suffix: "invalid".to_string()
+        }))
     );
 
     // Test for trailing dot
     let domain_with_trailing_dot = Domain::parse::<Box<_>>("example.com.").unwrap();
-    assert_eq!(domain_with_trailing_dot.as_str(), "example.com");
+    assert_eq!(domain_with_trailing_dot.as_str(), "example.com.");
 }
 
 #[test]
-fn test_error_handling() {
+fn error_handling() {
     // Test empty domains
-    assert_eq!(Domain::parse::<Box<_>>(""), Err(DomainCreationError::Empty));
+    assert_eq!(
+        Domain::parse::<Box<_>>(""),
+        Err(DomainCreateError::Parse(DomainParseError::Empty))
+    );
 
     // Test too long domains
     let too_long = "a".repeat(254) + ".com";
     assert_eq!(
         Domain::parse::<Box<_>>(&too_long),
-        Err(DomainCreationError::TooLong(too_long.to_string()))
+        Err(DomainCreateError::Parse(DomainParseError::TooLong {
+            domain: too_long.to_string()
+        }))
     );
 
     // Test label errors
     let domain_with_empty_label = "example..com";
     assert_eq!(
         Domain::parse::<Box<_>>(domain_with_empty_label),
-        Err(DomainCreationError::EmptyLabel(
-            domain_with_empty_label.to_string()
-        ))
+        Err(DomainCreateError::Parse(DomainParseError::EmptyLabel {
+            domain: domain_with_empty_label.to_string()
+        }))
     );
 
     let too_long_label = "a".repeat(64) + ".com";
     assert_eq!(
         Domain::parse::<Box<_>>(&too_long_label),
-        Err(DomainCreationError::TooLongLabel(
-            too_long_label.to_string(),
-            "a".repeat(64)
-        ))
+        Err(DomainCreateError::Parse(DomainParseError::TooLongLabel {
+            domain: too_long_label.to_string(),
+            label: "a".repeat(64)
+        }))
     );
 
     // Test invalid suffix
@@ -148,16 +173,18 @@ fn test_error_handling() {
     let domain_with_invalid_suffix = "example.notarealsuffix";
     assert_eq!(
         Domain::parse::<Box<_>>(domain_with_invalid_suffix),
-        Err(DomainCreationError::UnknownSuffix(
-            domain_with_invalid_suffix.to_string(),
-            "notarealsuffix".to_string()
-        ))
+        Err(DomainCreateError::Parse(DomainParseError::UnknownSuffix {
+            domain: domain_with_invalid_suffix.to_string(),
+            suffix: "notarealsuffix".to_string()
+        }))
     );
 
     // Test TLD with no root
     let tld_only = "com";
     assert_eq!(
         Domain::parse::<Box<_>>(tld_only),
-        Err(DomainCreationError::MissingRoot(tld_only.to_string()))
+        Err(DomainCreateError::Parse(DomainParseError::MissingRoot {
+            domain: tld_only.to_string()
+        }))
     );
 }
