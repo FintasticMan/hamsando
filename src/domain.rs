@@ -1,42 +1,67 @@
 use std::{
-    fmt::Display,
-    hash::Hash,
+    alloc::LayoutError,
+    borrow::Borrow,
+    cmp,
+    fmt::{self, Display},
+    hash::{self, Hash},
     ops::Deref,
+    ptr::slice_from_raw_parts,
     str::{self, FromStr},
 };
 
-use psl::Psl;
-use serde::Deserialize;
-use simple_dst::{AllocDst, AllocDstError, Dst};
+use serde::{Deserialize, Serialize};
+use simple_dst::{AllocDst, CloneToUninitDst, CopyDst, Dst, impl_to_owned_for};
 use thiserror::Error;
 
 const MAX_DOMAIN_LEN: usize = 253;
 const MAX_LABEL_LEN: usize = 63;
 
-#[derive(Debug, Error, PartialEq, Eq)]
-pub enum DomainCreationError {
+/// Errors representing invalid or malformed domain strings.
+#[derive(Debug, Error, PartialEq, Eq, Clone)]
+pub enum DomainParseError {
+    /// The domain is empty.
     #[error("domain is empty")]
     Empty,
-    #[error("{0}: domain contains an empty label")]
-    EmptyLabel(String),
-    #[error("{0}: domain has a prefix")]
-    HasPrefix(String),
-    #[error("{0}: domain has no root")]
-    MissingRoot(String),
+    /// The domain contains an empty label.
+    #[error("{domain}: domain contains an empty label")]
+    EmptyLabel { domain: String },
+    /// The domain has a prefix when it shouldn't ([`Root`]).
+    #[error("{domain}: domain has a prefix: {prefix}")]
+    HasPrefix { domain: String, prefix: String },
+    /// The domain has no root.
+    #[error("{domain}: domain has no root")]
+    MissingRoot { domain: String },
+    /// The domain is missing a suffix.
+    ///
     /// This case seems to be unreachable with this psl implementation.
-    #[error("{0}: domain is missing a suffix")]
-    MissingSuffix(String),
-    #[error("{0}: domain is too long: {0}")]
-    TooLong(String),
-    #[error("{0}: domain contains a too-long label: {1}")]
-    TooLongLabel(String, String),
-    #[error("{0}: domain has an unknown suffix, {1}")]
-    UnknownSuffix(String, String),
-    #[error(transparent)]
-    Alloc(#[from] AllocDstError),
+    #[error("{domain}: domain is missing a suffix")]
+    MissingSuffix { domain: String },
+    /// The domain is too long.
+    #[error("{domain}: domain is too long")]
+    TooLong { domain: String },
+    /// The domain contains a too-long label.
+    #[error("{domain}: domain contains a too-long label: {label}")]
+    TooLongLabel { domain: String, label: String },
+    /// The domain has an unknown suffix.
+    #[error("{domain}: domain has an unknown suffix: {suffix}")]
+    UnknownSuffix { domain: String, suffix: String },
 }
 
-fn get_domain(s: &str) -> &str {
+/// Errors that can occur when creating a domain instance.
+#[derive(Debug, Error, PartialEq, Eq, Clone)]
+pub enum DomainCreateError {
+    /// The domain string failed to parse.
+    #[error(transparent)]
+    Parse(#[from] DomainParseError),
+    /// Failure to calculate the layout of the domain type.
+    ///
+    /// This could happen if the length of the input string is almost [`isize::MAX`].
+    #[error(transparent)]
+    Layout(#[from] LayoutError),
+}
+
+/// Gets the not-fully-qualified part of the given domain.
+fn get_not_fqdn(s: &str) -> &str {
     if s.ends_with('.') {
         &s[..s.len() - 1]
     } else {
@@ -45,88 +70,135 @@ fn get_domain(s: &str) -> &str {
 }
 
 /// Returns the indices for the `.`s between the prefix and root, and before the suffix.
-fn parse_domain(domain: &str) -> Result<(Option<usize>, usize), DomainCreationError> {
-    if domain.is_empty() {
-        return Err(DomainCreationError::Empty);
+fn parse_domain(domain: &str) -> Result<(Option<usize>, usize), DomainParseError> {
+    let not_fqdn = get_not_fqdn(domain);
+
+    if not_fqdn.is_empty() {
+        return Err(DomainParseError::Empty);
     }
 
-    if domain.len() > MAX_DOMAIN_LEN {
-        return Err(DomainCreationError::TooLong(domain.to_string()));
+    if not_fqdn.len() > MAX_DOMAIN_LEN {
+        return Err(DomainParseError::TooLong {
+            domain: domain.to_string(),
+        });
     }
 
-    for label in domain.split('.') {
+    for label in not_fqdn.split('.') {
         if label.is_empty() {
-            return Err(DomainCreationError::EmptyLabel(domain.to_string()));
+            return Err(DomainParseError::EmptyLabel {
+                domain: domain.to_string(),
+            });
         } else if label.len() > MAX_LABEL_LEN {
-            return Err(DomainCreationError::TooLongLabel(
-                domain.to_string(),
-                label.to_string(),
-            ));
+            return Err(DomainParseError::TooLongLabel {
+                domain: domain.to_string(),
+                label: label.to_string(),
+            });
         }
     }
 
-    let suffix = match psl::List.suffix(domain.as_bytes()) {
-        Some(suffix) => suffix,
-        None => return Err(DomainCreationError::MissingSuffix(domain.to_string())),
-    };
+    let suffix =
+        psl::suffix(not_fqdn.as_bytes()).ok_or_else(|| DomainParseError::MissingSuffix {
+            domain: domain.to_string(),
+        })?;
+    let suffix_str = str::from_utf8(suffix.as_bytes())
+        .expect("psl crate returned invalid UTF-8 when slicing domain suffix");
     if !suffix.is_known() {
-        return Err(DomainCreationError::UnknownSuffix(
-            domain.to_string(),
-            str::from_utf8(suffix.as_bytes()).unwrap().to_string(),
-        ));
+        return Err(DomainParseError::UnknownSuffix {
+            domain: domain.to_string(),
+            suffix: suffix_str.to_string(),
+        });
     }
 
-    let suffix_len = str::from_utf8(suffix.as_bytes()).unwrap().len();
-    if domain.len() == suffix_len {
-        return Err(DomainCreationError::MissingRoot(domain.to_string()));
+    let suffix_len = suffix_str.len();
+    if not_fqdn.len() == suffix_len {
+        return Err(DomainParseError::MissingRoot {
+            domain: domain.to_string(),
+        });
     }
-    let suffix_separator_index = domain.len() - suffix_len - 1;
-    let without_suffix = &domain[..suffix_separator_index];
+    let suffix_separator_idx = not_fqdn.len() - suffix_len - 1;
+    let without_suffix = &not_fqdn[..suffix_separator_idx];
 
-    Ok((without_suffix.rfind('.'), suffix_separator_index))
+    Ok((without_suffix.rfind('.'), suffix_separator_idx))
 }
 
+/// The root part of a domain name.
+// LAYOUT: This struct must have the same layout as [`Domain`] so that it can be used to
+// create a [`Root`] without re-allocating.
 #[repr(C)]
-#[derive(Dst, Debug)]
+#[derive(Dst, CopyDst, CloneToUninitDst, Debug)]
 pub struct Root {
-    root_separator_index: Option<usize>,
-    suffix_separator_index: usize,
+    root_separator_idx: Option<usize>,
+    suffix_separator_idx: usize,
     domain: str,
 }
 
 impl Root {
-    /// This function will return an error if the input is not just the root
-    /// part of a domain.
-    pub fn parse<A>(input: &str) -> Result<A, DomainCreationError>
+    /// Parses a string and creates an owned Root.
+    ///
+    /// # Errors
+    ///
+    /// Will return an error in case the domain is invalid, contains a prefix, or if an
+    /// error occured during allocation.
+    pub fn parse<A>(input: &str) -> Result<A, DomainCreateError>
     where
         A: AllocDst<Self>,
     {
-        let root = get_domain(input);
-
-        let (root_separator_index, suffix_separator_index) = parse_domain(root)?;
-        if root_separator_index.is_some() {
-            return Err(DomainCreationError::HasPrefix(root.to_string()));
+        let (root_separator_idx, suffix_separator_idx) = parse_domain(input)?;
+        if let Some(root_separator_idx) = root_separator_idx {
+            return Err(DomainCreateError::Parse(DomainParseError::HasPrefix {
+                domain: input.to_string(),
+                prefix: input[..root_separator_idx].to_string(),
+            }));
         }
 
         Ok(Self::new_internal(
-            root_separator_index,
-            suffix_separator_index,
-            root,
+            root_separator_idx,
+            suffix_separator_idx,
+            input,
         )?)
     }
 
+    /// Returns a string representing the domain.
     pub fn as_str(&self) -> &str {
-        let offset = self.root_separator_index.map(|i| i + 1).unwrap_or(0);
+        let offset = self.root_separator_idx.map(|i| i + 1).unwrap_or(0);
         &self.domain[offset..]
     }
 
+    /// Returns the suffix (TLD) of the domain.
     pub fn suffix(&self) -> &str {
-        &self.domain[self.suffix_separator_index + 1..]
+        &self.domain[self.suffix_separator_idx + 1..]
+    }
+
+    /// Returns whether the domain is fully-qualified (i.e. ends in a `.`).
+    pub fn is_fqdn(&self) -> bool {
+        self.as_str().ends_with('.')
+    }
+
+    // Returns a Root representing the not-fully-qualified part.
+    pub fn not_fqdn(&self) -> &Self {
+        if !self.is_fqdn() {
+            return self;
+        }
+
+        // SAFETY: the pointer metadata for the Root type is just the length of the
+        // string in it, so creating a new pointer with the metadata of the length minus
+        // one is safe. Lowering the length by one doesn't influence the stored indices.
+        unsafe {
+            let ptr = (&raw const *self).cast::<()>();
+            // FUTURE: switch to using ptr_from_raw_parts when it has stabilised.
+            &*(slice_from_raw_parts(ptr, self.len() - 1) as *const Self)
+        }
     }
 }
 
 impl AsRef<str> for Root {
     fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl Borrow<str> for Root {
+    fn borrow(&self) -> &str {
         self.as_str()
     }
 }
@@ -148,31 +220,31 @@ impl PartialEq for Root {
 impl Eq for Root {}
 
 impl PartialOrd for Root {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for Root {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
         self.as_str().cmp(other.as_str())
     }
 }
 
 impl Hash for Root {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    fn hash<H: hash::Hasher>(&self, state: &mut H) {
         self.as_str().hash(state);
     }
 }
 
 impl Display for Root {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.as_str().fmt(f)
     }
 }
 
 impl FromStr for Box<Root> {
-    type Err = DomainCreationError;
+    type Err = DomainCreateError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Root::parse(s)
@@ -180,12 +252,14 @@ impl FromStr for Box<Root> {
 }
 
 impl TryFrom<&str> for Box<Root> {
-    type Error = DomainCreationError;
+    type Error = DomainCreateError;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         Root::parse(value)
     }
 }
+
+impl_to_owned_for!(Root, Box<Root>);
 
 impl<'de> Deserialize<'de> for Box<Root> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -199,7 +273,7 @@ impl<'de> Deserialize<'de> for Box<Root> {
         impl<'de> Visitor<'de> for RootVisitor {
             type Value = Box<Root>;
 
-            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
                 formatter.write_str("a string representing a domain root")
             }
 
@@ -207,7 +281,7 @@ impl<'de> Deserialize<'de> for Box<Root> {
             where
                 E: serde::de::Error,
             {
-                v.parse::<Box<Root>>().map_err(E::custom)
+                Root::parse(v).map_err(E::custom)
             }
         }
 
@@ -215,51 +289,103 @@ impl<'de> Deserialize<'de> for Box<Root> {
     }
 }
 
+impl<'de> Serialize for Box<Root> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+/// A domain name.
+// LAYOUT: This struct must have the same layout as [`Root`] so that it can be used to
+// create a [`Root`] without re-allocating.
 #[repr(C)]
-#[derive(Dst, Debug)]
+#[derive(Dst, CopyDst, CloneToUninitDst, Debug)]
 pub struct Domain {
-    root_separator_index: Option<usize>,
-    suffix_separator_index: usize,
+    root_separator_idx: Option<usize>,
+    suffix_separator_idx: usize,
     domain: str,
 }
 
 impl Domain {
-    pub fn parse<A>(input: &str) -> Result<A, DomainCreationError>
+    /// Parses a string and creates an owned Domain.
+    ///
+    /// # Errors
+    ///
+    /// Will return an error in case the domain is invalid or if an error occured during
+    /// allocation.
+    pub fn parse<A>(input: &str) -> Result<A, DomainCreateError>
     where
         A: AllocDst<Self>,
     {
-        let domain = get_domain(input);
-
-        let (root_separator_index, suffix_separator_index) = parse_domain(domain)?;
+        let (root_separator_idx, suffix_separator_idx) = parse_domain(input)?;
 
         Ok(Self::new_internal(
-            root_separator_index,
-            suffix_separator_index,
-            domain,
+            root_separator_idx,
+            suffix_separator_idx,
+            input,
         )?)
     }
 
+    /// Returns a string representing the domain.
     pub fn as_str(&self) -> &str {
         &self.domain
     }
 
+    /// Returns the prefix (subdomain) of the domain.
     pub fn prefix(&self) -> Option<&str> {
-        self.root_separator_index.map(|i| &self.domain[..i])
+        self.root_separator_idx.map(|i| &self.domain[..i])
     }
 
+    /// Returns the root part of the domain.
     pub fn root(&self) -> &Root {
         // SAFETY: Domain and Root have the exact same fields in the same order
         // and are both repr(C), meaning that they have the same layout.
         unsafe { &*((&raw const *self) as *const Root) }
     }
 
+    /// Returns the root part of the domain as a string.
+    pub fn root_str(&self) -> &str {
+        self.root().as_str()
+    }
+
+    /// Returns the suffix (TLD) of the domain.
     pub fn suffix(&self) -> &str {
-        &self.domain[self.suffix_separator_index + 1..]
+        &self.domain[self.suffix_separator_idx + 1..]
+    }
+
+    /// Returns whether the domain is fully-qualified (i.e. ends in a `'`).
+    pub fn is_fqdn(&self) -> bool {
+        self.as_str().ends_with('.')
+    }
+
+    // Returns a Domain representing the not-fully-qualified part.
+    pub fn not_fqdn(&self) -> &Self {
+        if !self.is_fqdn() {
+            return self;
+        }
+
+        // SAFETY: the pointer metadata for the Domain type is just the length of the
+        // string in it, so creating a new pointer with the metadata of the length minus
+        // one is safe. Lowering the length by one doesn't influence the stored indices.
+        unsafe {
+            let ptr = (&raw const *self).cast::<()>();
+            // FUTURE: switch to using ptr_from_raw_parts when it has stabilised.
+            &*(slice_from_raw_parts(ptr, self.len() - 1) as *const Self)
+        }
     }
 }
 
 impl AsRef<str> for Domain {
     fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl Borrow<str> for Domain {
+    fn borrow(&self) -> &str {
         self.as_str()
     }
 }
@@ -281,31 +407,31 @@ impl PartialEq for Domain {
 impl Eq for Domain {}
 
 impl PartialOrd for Domain {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for Domain {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
         self.as_str().cmp(other.as_str())
     }
 }
 
 impl Hash for Domain {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    fn hash<H: hash::Hasher>(&self, state: &mut H) {
         self.as_str().hash(state);
     }
 }
 
 impl Display for Domain {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.as_str().fmt(f)
     }
 }
 
 impl FromStr for Box<Domain> {
-    type Err = DomainCreationError;
+    type Err = DomainCreateError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Domain::parse(s)
@@ -313,12 +439,14 @@ impl FromStr for Box<Domain> {
 }
 
 impl TryFrom<&str> for Box<Domain> {
-    type Error = DomainCreationError;
+    type Error = DomainCreateError;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         Domain::parse(value)
     }
 }
+
+impl_to_owned_for!(Domain, Box<Domain>);
 
 impl<'de> Deserialize<'de> for Box<Domain> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -332,7 +460,7 @@ impl<'de> Deserialize<'de> for Box<Domain> {
         impl<'de> Visitor<'de> for DomainVisitor {
             type Value = Box<Domain>;
 
-            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
                 formatter.write_str("a string representing a domain")
             }
 
@@ -340,10 +468,213 @@ impl<'de> Deserialize<'de> for Box<Domain> {
             where
                 E: serde::de::Error,
             {
-                v.parse::<Box<Domain>>().map_err(E::custom)
+                Domain::parse(v).map_err(E::custom)
             }
         }
 
         deserializer.deserialize_str(DomainVisitor)
+    }
+}
+
+impl<'de> Serialize for Box<Domain> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn root_parsing() {
+        // Valid cases
+        assert_eq!(
+            Root::parse::<Box<_>>("example.com").unwrap().as_str(),
+            "example.com"
+        );
+        assert_eq!(
+            Root::parse::<Box<_>>("example.co.uk").unwrap().as_str(),
+            "example.co.uk"
+        );
+        assert_eq!(
+            Root::parse::<Box<_>>("example.org").unwrap().as_str(),
+            "example.org"
+        );
+        assert_eq!(
+            Root::parse::<Box<_>>("example.com.").unwrap().as_str(),
+            "example.com."
+        ); // trailing dot
+        assert_eq!(
+            Root::parse::<Box<_>>("example.com.")
+                .unwrap()
+                .not_fqdn()
+                .as_str(),
+            "example.com"
+        ); // remove trailing dot
+
+        // Invalid cases
+        assert_eq!(
+            Root::parse::<Box<_>>("www.example.com"),
+            Err(DomainCreateError::Parse(DomainParseError::HasPrefix {
+                domain: "www.example.com".to_string(),
+                prefix: "www".to_string(),
+            }))
+        );
+        assert_eq!(
+            Root::parse::<Box<_>>(".example.com"),
+            Err(DomainCreateError::Parse(DomainParseError::EmptyLabel {
+                domain: ".example.com".to_string()
+            }))
+        );
+        assert_eq!(
+            Root::parse::<Box<_>>("com"),
+            Err(DomainCreateError::Parse(DomainParseError::MissingRoot {
+                domain: "com".to_string()
+            }))
+        );
+        assert_eq!(
+            Root::parse::<Box<_>>(""),
+            Err(DomainCreateError::Parse(DomainParseError::Empty))
+        );
+
+        // Test for overly long domain
+        let too_long_domain = "a.".repeat(254) + ".com";
+        assert_eq!(
+            Root::parse::<Box<_>>(&too_long_domain),
+            Err(DomainCreateError::Parse(DomainParseError::TooLong {
+                domain: too_long_domain.to_string()
+            }))
+        );
+
+        // Test for overly long label
+        let too_long_label = "a".repeat(64) + ".com";
+        assert_eq!(
+            Root::parse::<Box<_>>(&too_long_label),
+            Err(DomainCreateError::Parse(DomainParseError::TooLongLabel {
+                domain: too_long_label.to_string(),
+                label: "a".repeat(64)
+            }))
+        );
+    }
+
+    #[test]
+    fn root_methods() {
+        let root = Root::parse::<Box<_>>("example.com").unwrap();
+        assert_eq!(root.as_str(), "example.com");
+        assert_eq!(root.suffix(), "com");
+
+        let root_with_complex_suffix = Root::parse::<Box<_>>("example.co.uk").unwrap();
+        assert_eq!(root_with_complex_suffix.as_str(), "example.co.uk");
+        assert_eq!(root_with_complex_suffix.suffix(), "co.uk");
+    }
+
+    #[test]
+    fn domain_parsing() {
+        // Valid cases
+        let domain = Domain::parse::<Box<_>>("example.com").unwrap();
+        assert_eq!(domain.as_str(), "example.com");
+        assert_eq!(domain.prefix(), None);
+        assert_eq!(domain.root().as_str(), "example.com");
+        assert_eq!(domain.suffix(), "com");
+
+        let domain_with_prefix = Domain::parse::<Box<_>>("www.example.com").unwrap();
+        assert_eq!(domain_with_prefix.as_str(), "www.example.com");
+        assert_eq!(domain_with_prefix.prefix(), Some("www"));
+        assert_eq!(domain_with_prefix.root().as_str(), "example.com");
+        assert_eq!(domain_with_prefix.suffix(), "com");
+
+        let domain_with_complex_suffix = Domain::parse::<Box<_>>("blog.example.co.uk").unwrap();
+        assert_eq!(domain_with_complex_suffix.as_str(), "blog.example.co.uk");
+        assert_eq!(domain_with_complex_suffix.prefix(), Some("blog"));
+        assert_eq!(domain_with_complex_suffix.root().as_str(), "example.co.uk");
+        assert_eq!(domain_with_complex_suffix.suffix(), "co.uk");
+
+        // Multiple level prefixes
+        let multi_prefix = Domain::parse::<Box<_>>("dev.api.example.org").unwrap();
+        assert_eq!(multi_prefix.as_str(), "dev.api.example.org");
+        assert_eq!(multi_prefix.prefix(), Some("dev.api"));
+        assert_eq!(multi_prefix.root().as_str(), "example.org");
+        assert_eq!(multi_prefix.suffix(), "org");
+
+        // Invalid cases
+        assert_eq!(
+            Domain::parse::<Box<_>>(""),
+            Err(DomainCreateError::Parse(DomainParseError::Empty))
+        );
+
+        // Test for unknown suffix
+        let invalid_domain = "example.invalid";
+        assert_eq!(
+            Domain::parse::<Box<_>>(invalid_domain),
+            Err(DomainCreateError::Parse(DomainParseError::UnknownSuffix {
+                domain: invalid_domain.to_string(),
+                suffix: "invalid".to_string()
+            }))
+        );
+
+        // Test for trailing dot
+        let domain_with_trailing_dot = Domain::parse::<Box<_>>("example.com.").unwrap();
+        assert_eq!(domain_with_trailing_dot.as_str(), "example.com.");
+    }
+
+    #[test]
+    fn error_handling() {
+        // Test empty domains
+        assert_eq!(
+            Domain::parse::<Box<_>>(""),
+            Err(DomainCreateError::Parse(DomainParseError::Empty))
+        );
+
+        // Test too long domains
+        let too_long = "a".repeat(254) + ".com";
+        assert_eq!(
+            Domain::parse::<Box<_>>(&too_long),
+            Err(DomainCreateError::Parse(DomainParseError::TooLong {
+                domain: too_long.to_string()
+            }))
+        );
+
+        // Test label errors
+        let domain_with_empty_label = "example..com";
+        assert_eq!(
+            Domain::parse::<Box<_>>(domain_with_empty_label),
+            Err(DomainCreateError::Parse(DomainParseError::EmptyLabel {
+                domain: domain_with_empty_label.to_string()
+            }))
+        );
+
+        let too_long_label = "a".repeat(64) + ".com";
+        assert_eq!(
+            Domain::parse::<Box<_>>(&too_long_label),
+            Err(DomainCreateError::Parse(DomainParseError::TooLongLabel {
+                domain: too_long_label.to_string(),
+                label: "a".repeat(64)
+            }))
+        );
+
+        // Test invalid suffix
+        // It doesn't seem to be possible to hit the missing suffix edge case due to the
+        // way psl is implemented, so there's no test for that.
+        let domain_with_invalid_suffix = "example.notarealsuffix";
+        assert_eq!(
+            Domain::parse::<Box<_>>(domain_with_invalid_suffix),
+            Err(DomainCreateError::Parse(DomainParseError::UnknownSuffix {
+                domain: domain_with_invalid_suffix.to_string(),
+                suffix: "notarealsuffix".to_string()
+            }))
+        );
+
+        // Test TLD with no root
+        let tld_only = "com";
+        assert_eq!(
+            Domain::parse::<Box<_>>(tld_only),
+            Err(DomainCreateError::Parse(DomainParseError::MissingRoot {
+                domain: tld_only.to_string()
+            }))
+        );
     }
 }

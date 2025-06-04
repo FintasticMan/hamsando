@@ -27,8 +27,6 @@
 
 mod client;
 pub mod domain;
-#[cfg(test)]
-mod domaintests;
 mod errors;
 mod payload;
 pub mod record;
