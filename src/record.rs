@@ -7,7 +7,7 @@ use std::{
 };
 
 use serde::Deserialize;
-use strum_macros::IntoStaticStr;
+use strum::IntoStaticStr;
 
 use crate::{ContentCreationError, domain::Domain};
 
