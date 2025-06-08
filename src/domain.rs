@@ -13,7 +13,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use simple_dst::{AllocDst, CloneToUninitDst, CopyDst, Dst, impl_to_owned_for};
+use simple_dst::{AllocDst, CloneToUninit, Dst, ToOwned};
 use thiserror::Error;
 
 const MAX_DOMAIN_LEN: usize = 253;
@@ -128,7 +128,8 @@ fn parse_domain(domain: &str) -> Result<(Option<usize>, usize), DomainParseError
 // LAYOUT: This struct must have the same layout as [`Domain`] so that it can be used to
 // create a [`Root`] without re-allocating.
 #[repr(C)]
-#[derive(Dst, CopyDst, CloneToUninitDst, Debug)]
+#[derive(Debug, Dst, CloneToUninit, ToOwned)]
+#[dst(new_unchecked_vis = pub)]
 pub struct Root {
     root_separator_idx: Option<usize>,
     suffix_separator_idx: usize,
@@ -154,11 +155,7 @@ impl Root {
             }));
         }
 
-        Ok(Self::new_internal(
-            root_separator_idx,
-            suffix_separator_idx,
-            input,
-        )?)
+        Ok(unsafe { Self::new_unchecked(root_separator_idx, suffix_separator_idx, input) }?)
     }
 
     /// Returns a string representing the domain.
@@ -262,8 +259,6 @@ impl TryFrom<&str> for Box<Root> {
     }
 }
 
-impl_to_owned_for!(Root, Box<Root>);
-
 impl<'de> Deserialize<'de> for Box<Root> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -305,7 +300,8 @@ impl<'de> Serialize for Box<Root> {
 // LAYOUT: This struct must have the same layout as [`Root`] so that it can be used to
 // create a [`Root`] without re-allocating.
 #[repr(C)]
-#[derive(Dst, CopyDst, CloneToUninitDst, Debug)]
+#[derive(Debug, Dst, CloneToUninit, ToOwned)]
+#[dst(new_unchecked_vis = pub)]
 pub struct Domain {
     root_separator_idx: Option<usize>,
     suffix_separator_idx: usize,
@@ -325,11 +321,7 @@ impl Domain {
     {
         let (root_separator_idx, suffix_separator_idx) = parse_domain(input)?;
 
-        Ok(Self::new_internal(
-            root_separator_idx,
-            suffix_separator_idx,
-            input,
-        )?)
+        Ok(unsafe { Self::new_unchecked(root_separator_idx, suffix_separator_idx, input) }?)
     }
 
     /// Returns a string representing the domain.
@@ -448,8 +440,6 @@ impl TryFrom<&str> for Box<Domain> {
         Domain::parse(value)
     }
 }
-
-impl_to_owned_for!(Domain, Box<Domain>);
 
 impl<'de> Deserialize<'de> for Box<Domain> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
