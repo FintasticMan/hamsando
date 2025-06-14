@@ -65,11 +65,7 @@ pub enum DomainCreateError {
 
 /// Gets the not-fully-qualified part of the given domain.
 fn get_not_fqdn(s: &str) -> &str {
-    if s.ends_with('.') {
-        &s[..s.len() - 1]
-    } else {
-        s
-    }
+    s.strip_suffix('.').unwrap_or(s)
 }
 
 /// Returns the indices for the `.`s between the prefix and root, and before the suffix.
@@ -287,7 +283,7 @@ impl<'de> Deserialize<'de> for Box<Root> {
     }
 }
 
-impl<'de> Serialize for Box<Root> {
+impl Serialize for Box<Root> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -469,7 +465,7 @@ impl<'de> Deserialize<'de> for Box<Domain> {
     }
 }
 
-impl<'de> Serialize for Box<Domain> {
+impl Serialize for Box<Domain> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
